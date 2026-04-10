@@ -1,0 +1,358 @@
+{
+  "model": "openai/gpt-oss-20b",
+  "top_k": 5,
+  "embed_model": "all-MiniLM-L6-v2",
+  "results": [
+    {
+      "question_id": 1,
+      "question": "What is the exact bit encoding of the BEQ instruction in RV32I?",
+      "retrieved_chunks": [
+        {
+          "title": "2.1.3. Immediate Encoding Variants",
+          "score": 0.5813
+        },
+        {
+          "title": "2.1. RV32I Base Integer Instruction Set, Version 2.1",
+          "score": 0.5468
+        },
+        {
+          "title": "2.1.5. Control Transfer Instructions",
+          "score": 0.5438
+        },
+        {
+          "title": "2.1.2. Base Instruction Formats",
+          "score": 0.5346
+        },
+        {
+          "title": "2.1.6. Load and Store Instructions",
+          "score": 0.5066
+        }
+      ],
+      "answer": "**BEQ (branch‑equal) – RV32I**\n\nThe BEQ instruction is a *B‑type* branch.  \nIts 32‑bit encoding follows the B‑type layout shown in the “Base Instruction Formats” diagram and the description in the “Immediate Encoding Variants” section.\n\n| Bit field | Position | Value for BEQ |\n|-----------|----------|---------------|\n| `imm[12]` | 31 | sign‑bit of the branch offset |\n| `imm[10:5]` | 30‑25 | bits 10‑5 of the offset |\n| `rs2` | 24‑20 | source register 2 |\n| `rs1` | 19‑15 | source register 1 |\n| `funct3` | 14‑12 | `000` (BEQ) |\n| `imm[4:1]` | 11‑8 | bits 4‑1 of the offset |\n|"
+    },
+    {
+      "question_id": 2,
+      "question": "How does the JALR instruction compute its target address?",
+      "retrieved_chunks": [
+        {
+          "title": "2.1.5.1. Unconditional Jumps",
+          "score": 0.5888
+        },
+        {
+          "title": "2.1.5. Control Transfer Instructions",
+          "score": 0.5753
+        },
+        {
+          "title": "2.1.3. Immediate Encoding Variants",
+          "score": 0.4877
+        },
+        {
+          "title": "2.1.2. Base Instruction Formats",
+          "score": 0.4638
+        },
+        {
+          "title": "2.1.4.3. NOP Instruction",
+          "score": 0.4569
+        }
+      ],
+      "answer": "**JALR target‑address calculation**\n\nThe JALR (jump‑and‑link‑register) instruction uses the **I‑type** format.  \nIts target address is computed in three steps:\n\n1. **Sign‑extend the 12‑bit immediate**  \n   The immediate field (imm[11:0]) is sign‑extended to XLEN bits.\n\n2. **Add to the base register**  \n   The extended immediate is added to the value in the source register `rs1`:\n   \\[\n   \\text{addr} = \\text{rs1} + \\text{sign‑ext(imm[11:0])}\n   \\]\n\n3. **Clear the least‑significant bit**  \n   The result’s bit 0 is forced to zero (the hardware clears it), producing an address that is always 2‑byte aligned:\n   \\[\n   \\text{target} = \\text{addr} \\;\\&\\; \\sim1\n   \\]\n\nThe computed `target` is then used as the new program counter.  \nSimultaneously, the address of the instruction following the JALR (`pc + 4`) is written into the destination register `rd` (unless `rd` is `x0`, in which case the link value is discarded).\n\nThus, JALR performs a PC‑relative jump where the offset is the sign‑extended immediate added to a register value, with the low bit cleared to enforce alignment."
+    },
+    {
+      "question_id": 3,
+      "question": "What is the difference between SRL and SRA in RV32I?",
+      "retrieved_chunks": [
+        {
+          "title": "2.1.5. Control Transfer Instructions",
+          "score": 0.444
+        },
+        {
+          "title": "2.1.4.2. Integer Register-Register Instructions",
+          "score": 0.4378
+        },
+        {
+          "title": "2.1. RV32I Base Integer Instruction Set, Version 2.1",
+          "score": 0.4351
+        },
+        {
+          "title": "rv32ui Test: SRLI",
+          "score": 0.4089
+        },
+        {
+          "title": "2.1.6. Load and Store Instructions",
+          "score": 0.4089
+        }
+      ],
+      "answer": "In RV32I the two “right‑shift” instructions are **SRL** (shift right logical) and **SRA** (shift right arithmetic).  \nBoth are R‑type instructions that take the value in **rs1** and shift it right by the amount given in the lower 5 bits of **rs2**.  \nThe only difference is how the vacated high‑order bits are filled:\n\n| Instruction | Shift type | High‑order bits filled with | Typical use |\n|-------------|------------|-----------------------------|-------------|\n| **SRL** | Logical right shift | `0` (zero) | Unsigned values, bit‑field extraction |\n| **SRA** | Arithmetic right shift | Sign bit of the original value (replicated) | Signed values, preserving sign |\n\nSo, for a negative number (most‑significant bit = 1), **SRL** will shift in zeros and change the sign, whereas **SRA** will shift in ones and keep the number negative (sign‑extension).  \nBoth use the same `funct3` field (101); the difference is in the `funct7` field (`0000000` for SRL, `0100000` for SRA)."
+    },
+    {
+      "question_id": 4,
+      "question": "How does AUIPC use the program counter?",
+      "retrieved_chunks": [
+        {
+          "title": "2.1.1. Programmers' Model for Base Integer ISA",
+          "score": 0.4269
+        },
+        {
+          "title": "rv32ui Test: AUIPC",
+          "score": 0.3355
+        },
+        {
+          "title": "2.1.5.1. Unconditional Jumps",
+          "score": 0.33
+        },
+        {
+          "title": "2.1.8. Environment Call and Breakpoints",
+          "score": 0.3124
+        },
+        {
+          "title": "2.1.5. Control Transfer Instructions",
+          "score": 0.3079
+        }
+      ],
+      "answer": ""
+    },
+    {
+      "question_id": 5,
+      "question": "What happens when you write to register x0 in RV32I?",
+      "retrieved_chunks": [
+        {
+          "title": "2.1.1. Programmers' Model for Base Integer ISA",
+          "score": 0.575
+        },
+        {
+          "title": "2.1.5. Control Transfer Instructions",
+          "score": 0.5642
+        },
+        {
+          "title": "2.1.6. Load and Store Instructions",
+          "score": 0.5348
+        },
+        {
+          "title": "rv32ui Test: XORI",
+          "score": 0.5298
+        },
+        {
+          "title": "rv32ui Test: XOR",
+          "score": 0.5262
+        }
+      ],
+      "answer": "In RV32I the register **x0 is hard‑wired to zero**.  \nAny instruction that writes to x0 (e.g., `addi x0, rs1, imm`, `sw rs2, 0(x0)`, or a `JALR`/`JAL` that targets `x0`) **does not change the value of x0**. The write is effectively ignored; the register file keeps the zero value and subsequent reads of x0 always return 0. This invariant is required by the ISA and is explicitly checked in the test suites (e.g., the `TEST_RR_ZERODEST` case)."
+    },
+    {
+      "question_id": 6,
+      "question": "What sign extension does LH perform on a 16-bit value?",
+      "retrieved_chunks": [
+        {
+          "title": "2.1.4.1. Integer Register-Immediate Instructions",
+          "score": 0.4457
+        },
+        {
+          "title": "2.1.4. Integer Computational Instructions",
+          "score": 0.4319
+        },
+        {
+          "title": "2.1.3. Immediate Encoding Variants",
+          "score": 0.412
+        },
+        {
+          "title": "2.1.4.2. Integer Register-Register Instructions",
+          "score": 0.4076
+        },
+        {
+          "title": "2.1.5.2. Conditional Branches",
+          "score": 0.4033
+        }
+      ],
+      "answer": "The provided context does not contain any information about load instructions such as **LH** (load half‑word). Therefore I cannot answer the question based on the supplied material. If you can provide the relevant section of the RISC‑V specification that describes the LH instruction, I can give a precise answer."
+    },
+    {
+      "question_id": 7,
+      "question": "What is the byte mask for an SB instruction?",
+      "retrieved_chunks": [
+        {
+          "title": "2.1.3. Immediate Encoding Variants",
+          "score": 0.6052
+        },
+        {
+          "title": "2.1.4.3. NOP Instruction",
+          "score": 0.5445
+        },
+        {
+          "title": "2.1.5.2. Conditional Branches",
+          "score": 0.5172
+        },
+        {
+          "title": "2.1.5.1. Unconditional Jumps",
+          "score": 0.4834
+        },
+        {
+          "title": "2.1.4.1. Integer Register-Immediate Instructions",
+          "score": 0.4797
+        }
+      ],
+      "answer": "The provided excerpts describe instruction formats, immediates, and control‑flow instructions, but they do not contain any information about memory‑access byte masks or the specific byte‑mask value used by the SB (store‑byte) instruction. Therefore, the byte mask for an SB instruction cannot be determined from the given context."
+    },
+    {
+      "question_id": 8,
+      "question": "How does the riscv-tests suite signal PASS or FAIL to the testbench?",
+      "retrieved_chunks": [
+        {
+          "title": "riscv-tests: test_macros.h — Branch and Jump RTL Contracts",
+          "score": 0.5475
+        },
+        {
+          "title": "riscv-tests: TVM Protocol and Test Format",
+          "score": 0.5032
+        },
+        {
+          "title": "riscv-tests: test_macros.h — Memory Load/Store RTL Contracts",
+          "score": 0.4671
+        },
+        {
+          "title": "riscv-tests: test_macros.h — Register-Immediate and Register-Register RTL Contracts",
+          "score": 0.4502
+        },
+        {
+          "title": "rv32ui Test: JAL",
+          "score": 0.4416
+        }
+      ],
+      "answer": "In the **riscv‑tests** framework the test program signals its result to the simulation by writing a value to the **tohost** memory‑mapped register.  \n* The address used is the one defined by the linker (normally `0x80001000`).  \n* A write of **`1`** is interpreted as **PASS**.  \n* Any other non‑zero value is treated as **FAIL**; the failure code is encoded in bits `[31:1]` of the written word (the test number).  \n\nThe Verilog testbench simply polls the tohost address and stops the simulation as soon as it sees a non‑zero write. This mechanism is invoked by the `RVTEST_PASS` / `RVTEST_FAIL` macros (or by the test code itself) that perform the write."
+    },
+    {
+      "question_id": 9,
+      "question": "What RTL invariant does TEST_RR_ZERODEST enforce?",
+      "retrieved_chunks": [
+        {
+          "title": "riscv-tests: test_macros.h — Register-Immediate and Register-Register RTL Contracts",
+          "score": 0.5151
+        },
+        {
+          "title": "rv32ui Test: MA_DATA",
+          "score": 0.505
+        },
+        {
+          "title": "riscv-tests: test_macros.h — Memory Load/Store RTL Contracts",
+          "score": 0.5018
+        },
+        {
+          "title": "riscv-tests: test_macros.h — Branch and Jump RTL Contracts",
+          "score": 0.4972
+        },
+        {
+          "title": "rv32ui Test: SIMPLE",
+          "score": 0.4881
+        }
+      ],
+      "answer": "**RTL invariant enforced by `TEST_RR_ZERODEST`**\n\n`TEST_RR_ZERODEST` checks that a write to the zero register (`x0`) does **not** alter its value.  \nThe macro executes an R‑type instruction with `rd = x0` and then verifies that `x0` still reads as zero. This is the most critical invariant for the RISC‑V architecture: the zero register must remain hard‑wired to 0 regardless of any write attempts."
+    },
+    {
+      "question_id": 10,
+      "question": "What does TEST_BR2_OP_NOTTAKEN verify about branch logic?",
+      "retrieved_chunks": [
+        {
+          "title": "riscv-tests: test_macros.h — Branch and Jump RTL Contracts",
+          "score": 0.6277
+        },
+        {
+          "title": "2.1.5.2. Conditional Branches",
+          "score": 0.4991
+        },
+        {
+          "title": "rv32ui Test: BGEU",
+          "score": 0.4869
+        },
+        {
+          "title": "rv32ui Test: BLTU",
+          "score": 0.484
+        },
+        {
+          "title": "rv32ui Test: BNE",
+          "score": 0.4776
+        }
+      ],
+      "answer": "**TEST_BR2_OP_NOTTAKEN** checks that a conditional branch behaves correctly when its condition is *false*:\n\n1. **Condition evaluation** – the branch instruction must correctly determine that the comparison between the two source registers (`rs1` and `rs2`) is false (e.g., `rs1 == rs2` for BEQ, `rs1 != rs2` for BNE, `rs1 < rs2` for BLT, etc.).\n\n2. **PC update** – because the condition is false, the PC must **not** jump to the target address. Instead, it must advance sequentially by the normal instruction‑length step, i.e., **PC ← PC + 4**.\n\nIn short, the macro verifies that a conditional branch *does not* alter the PC when its predicate is false, ensuring correct branch‑condition logic and the expected sequential PC increment."
+    },
+    {
+      "question_id": 11,
+      "question": "What is the tohost memory address the Verilog testbench must poll?",
+      "retrieved_chunks": [
+        {
+          "title": "rv32ui Test: MA_DATA",
+          "score": 0.6275
+        },
+        {
+          "title": "rv32ui Test: LD_ST",
+          "score": 0.6248
+        },
+        {
+          "title": "rv32ui Test: ST_LD",
+          "score": 0.6201
+        },
+        {
+          "title": "rv32ui Test: LH",
+          "score": 0.6183
+        },
+        {
+          "title": "rv32ui Test: LHU",
+          "score": 0.6172
+        }
+      ],
+      "answer": "The testbench should poll the **tohost** address **0x80001000** (or the address that the linker assigns to the `tohost` symbol). When a non‑zero value is written there the simulation stops."
+    },
+    {
+      "question_id": 12,
+      "question": "What modules are needed to implement a single-cycle RV32I processor?",
+      "retrieved_chunks": [
+        {
+          "title": "2.1. RV32I Base Integer Instruction Set, Version 2.1",
+          "score": 0.5535
+        },
+        {
+          "title": "2.1.5. Control Transfer Instructions",
+          "score": 0.414
+        },
+        {
+          "title": "2.1.6. Load and Store Instructions",
+          "score": 0.3772
+        },
+        {
+          "title": "2.1.9. HINT Instructions",
+          "score": 0.3716
+        },
+        {
+          "title": "rv32ui Test: SLTI",
+          "score": 0.3518
+        }
+      ],
+      "answer": ""
+    },
+    {
+      "question_id": 13,
+      "question": "What are the corner cases for the ALU in an RV32I implementation?",
+      "retrieved_chunks": [
+        {
+          "title": "2.1. RV32I Base Integer Instruction Set, Version 2.1",
+          "score": 0.5032
+        },
+        {
+          "title": "2.1.2. Base Instruction Formats",
+          "score": 0.5022
+        },
+        {
+          "title": "rv32ui Test: BGEU",
+          "score": 0.4239
+        },
+        {
+          "title": "rv32ui Test: LBU",
+          "score": 0.419
+        },
+        {
+          "title": "rv32ui Test: SLTIU",
+          "score": 0.4187
+        }
+      ],
+      "answer": ""
+    }
+  ]
+}

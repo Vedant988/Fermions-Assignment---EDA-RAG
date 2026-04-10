@@ -1,0 +1,679 @@
+{
+    "assumptions": [
+        "Clock is active\u2011high and synchronous; all state updates occur on the rising edge.",
+        "Reset is active\u2011high and synchronous; all registers and state machines are reset on the same clock edge.",
+        "Instruction and data memories are separate, synchronous, and provide data on the same cycle as the address is presented.",
+        "All memory accesses are aligned; misaligned accesses are considered illegal and will not be exercised by the riscv-tests.",
+        "The processor operates in user mode only; no privilege levels, no MMU, no PMP, no CSRs beyond the minimal PC and register file.",
+        "All combinational logic (decoder, ALU, branch unit, etc.) is combinational and produces outputs within one clock cycle."
+    ],
+    "restrictions": [
+        "No floating\u2011point or vector extensions.",
+        "No privileged instructions (ECALL, EBREAK, FENCE, etc.).",
+        "No external interrupt handling.",
+        "No cache or TLB; instruction and data memories are directly accessible.",
+        "No support for compressed (C) or other optional extensions."
+    ],
+    "instructions_coverage": {
+        "must_support": [
+            {
+                "category": "Arithmetic/logic",
+                "instructions": [
+                    "ADD",
+                    "SUB",
+                    "AND",
+                    "OR",
+                    "XOR",
+                    "SLT",
+                    "SLTU",
+                    "SLL",
+                    "SRL",
+                    "SRA"
+                ]
+            },
+            {
+                "category": "Immediate",
+                "instructions": [
+                    "ADDI",
+                    "ANDI",
+                    "ORI",
+                    "XORI",
+                    "SLTI",
+                    "SLTIU",
+                    "SLLI",
+                    "SRLI",
+                    "SRAI"
+                ]
+            },
+            {
+                "category": "Upper immediates",
+                "instructions": [
+                    "LUI",
+                    "AUIPC"
+                ]
+            },
+            {
+                "category": "Branches",
+                "instructions": [
+                    "BEQ",
+                    "BNE",
+                    "BLT",
+                    "BGE",
+                    "BLTU",
+                    "BGEU"
+                ]
+            },
+            {
+                "category": "Loads",
+                "instructions": [
+                    "LB",
+                    "LH",
+                    "LW",
+                    "LBU",
+                    "LHU"
+                ]
+            },
+            {
+                "category": "Stores",
+                "instructions": [
+                    "SB",
+                    "SH",
+                    "SW"
+                ]
+            },
+            {
+                "category": "Jumps",
+                "instructions": [
+                    "JAL",
+                    "JALR"
+                ]
+            }
+        ],
+        "optional_or_ignored": [],
+        "not_required_for_riscv_tests": [
+            "ECALL",
+            "EBREAK",
+            "FENCE",
+            "FENCE.I",
+            "CSRRW",
+            "CSRRS",
+            "CSRRC",
+            "CSRRWI",
+            "CSRRSI",
+            "CSRRCI"
+        ]
+    },
+    "top_level_interfaces": [
+        {
+            "port_name": "clk",
+            "direction": "input",
+            "width": "1",
+            "description": "System clock."
+        },
+        {
+            "port_name": "reset",
+            "direction": "input",
+            "width": "1",
+            "description": "Active\u2011high synchronous reset."
+        },
+        {
+            "port_name": "instr_addr",
+            "direction": "output",
+            "width": "32",
+            "description": "Address sent to instruction memory."
+        },
+        {
+            "port_name": "instr_data",
+            "direction": "input",
+            "width": "32",
+            "description": "Instruction word fetched from instruction memory."
+        },
+        {
+            "port_name": "data_addr",
+            "direction": "output",
+            "width": "32",
+            "description": "Address sent to data memory."
+        },
+        {
+            "port_name": "data_wdata",
+            "direction": "output",
+            "width": "32",
+            "description": "Data to be written to data memory."
+        },
+        {
+            "port_name": "data_rdata",
+            "direction": "input",
+            "width": "32",
+            "description": "Data read from data memory."
+        },
+        {
+            "port_name": "data_we",
+            "direction": "output",
+            "width": "1",
+            "description": "Write enable for data memory."
+        },
+        {
+            "port_name": "data_be",
+            "direction": "output",
+            "width": "4",
+            "description": "Byte enable for data memory (bit i active for byte i)."
+        }
+    ],
+    "datapath": [
+        "PC -> Instruction Memory (addr) -> Instruction Decoder.",
+        "Decoder -> Register File (read ports) and Immediate Generator.",
+        "ALU receives operands from Register File or Immediate Generator.",
+        "Branch Unit evaluates branch conditions using ALU results.",
+        "Load/Store Unit generates memory address, byte enable, and write data.",
+        "PC updated by PC Update logic based on branch/jump outcome."
+    ],
+    "control_signals": [
+        {
+            "signal": "alu_op",
+            "purpose": "Selects ALU operation (ADD, SUB, AND, OR, XOR, SLL, SRL, SRA, SLT, SLTU)."
+        },
+        {
+            "signal": "alu_src",
+            "purpose": "Selects second ALU operand source: register or immediate."
+        },
+        {
+            "signal": "mem_read",
+            "purpose": "Enables data memory read."
+        },
+        {
+            "signal": "mem_write",
+            "purpose": "Enables data memory write."
+        },
+        {
+            "signal": "mem_size",
+            "purpose": "Specifies load/store size: byte, halfword, word."
+        },
+        {
+            "signal": "branch_taken",
+            "purpose": "Indicates whether a branch or jump was taken."
+        },
+        {
+            "signal": "pc_src",
+            "purpose": "Selects next PC source: PC+4, branch target, jump target."
+        }
+    ],
+    "memory_map": [
+        "Instruction memory: 0x00000000 \u2013 0x0FFFFFFF (32\u2011bit words).",
+        "Data memory: 0x10000000 \u2013 0x1FFFFFFF (32\u2011bit words).",
+        "No MMIO or peripheral regions are defined."
+    ],
+    "reset_behavior": [
+        "PC is set to 0x00000000.",
+        "All general\u2011purpose registers (x0\u2011x31) are initialized to 0; x0 is hard\u2011wired to 0.",
+        "All control signals are set to default (no memory access, PC+4).",
+        "No pending interrupts or exceptions."
+    ],
+    "pc_update_rules": [
+        "Default: PC_next = PC + 4.",
+        "If branch_taken == 1 and branch condition is true: PC_next = branch_target.",
+        "If JAL: PC_next = PC + 4; PC = PC + 4 + imm.",
+        "If JALR: PC_next = PC + 4; PC = (rs1 + imm) & ~1."
+    ],
+    "load_store_rules": [
+        "Load: data_rdata is masked and sign/zero\u2011extended based on mem_size.",
+        "Store: data_be is set to 1 for each byte written; data_wdata contains the full 32\u2011bit word with the relevant bytes updated.",
+        "All addresses are word\u2011aligned; misaligned accesses are considered illegal and will not be exercised."
+    ],
+    "branch_rules": [
+        "Branch condition evaluated combinationally by the Branch Unit using ALU result or register comparison.",
+        "Branch target = PC + 4 + sign\u2011extended immediate.",
+        "Branch taken only if condition is true; otherwise PC_next = PC + 4."
+    ],
+    "testbench_requirements": [
+        "Provide synchronous instruction memory that returns the instruction word on the same cycle the address is presented.",
+        "Provide synchronous data memory that accepts address, write enable, byte enable, and write data; returns read data on the same cycle.",
+        "Reset the processor before loading the test program; keep reset low after initialization.",
+        "Observe PC and register file values to verify correct execution of riscv-tests.",
+        "No external interrupts or exceptions are required."
+    ],
+    "module_order": [
+        "register_file",
+        "immediate_generator",
+        "alu",
+        "control_unit",
+        "branch_unit",
+        "load_store_unit",
+        "top_module"
+    ],
+    "modules": [
+        {
+            "module_name": "register_file",
+            "purpose": "32\u2011bit wide, 32\u2011entry register file with two read ports and one write port.",
+            "inputs": [
+                {
+                    "name": "clk",
+                    "width": "1",
+                    "description": "Clock input."
+                },
+                {
+                    "name": "reset",
+                    "width": "1",
+                    "description": "Synchronous reset."
+                },
+                {
+                    "name": "read_addr1",
+                    "width": "5",
+                    "description": "First read register address."
+                },
+                {
+                    "name": "read_addr2",
+                    "width": "5",
+                    "description": "Second read register address."
+                },
+                {
+                    "name": "write_addr",
+                    "width": "5",
+                    "description": "Write register address."
+                },
+                {
+                    "name": "write_data",
+                    "width": "32",
+                    "description": "Data to write."
+                },
+                {
+                    "name": "write_enable",
+                    "width": "1",
+                    "description": "Write enable signal."
+                }
+            ],
+            "outputs": [
+                {
+                    "name": "read_data1",
+                    "width": "32",
+                    "description": "Data from first read port."
+                },
+                {
+                    "name": "read_data2",
+                    "width": "32",
+                    "description": "Data from second read port."
+                }
+            ],
+            "internal_behavior": [
+                "Registers are stored in a 32\u00d732 array.",
+                "On reset, all registers are set to 0; x0 remains 0 regardless of write attempts.",
+                "Read ports are combinational; write occurs on rising edge of clk if write_enable is high."
+            ],
+            "depends_on": [],
+            "corner_cases": [
+                "Attempting to write to x0 has no effect.",
+                "Simultaneous read/write to the same register returns the old value (no forwarding)."
+            ]
+        },
+        {
+            "module_name": "immediate_generator",
+            "purpose": "Generates 12\u2011bit sign\u2011extended or 20\u2011bit sign\u2011extended immediates for I, S, B, U, and J instruction formats.",
+            "inputs": [
+                {
+                    "name": "instr",
+                    "width": "32",
+                    "description": "Full instruction word."
+                },
+                {
+                    "name": "opcode",
+                    "width": "7",
+                    "description": "Opcode field of the instruction."
+                }
+            ],
+            "outputs": [
+                {
+                    "name": "imm",
+                    "width": "32",
+                    "description": "Sign\u2011extended immediate value."
+                }
+            ],
+            "internal_behavior": [
+                "Decodes immediate based on opcode and instruction format.",
+                "For U and J formats, the immediate is left\u2011shifted appropriately before sign extension."
+            ],
+            "depends_on": [],
+            "corner_cases": [
+                "Immediate for LUI and AUIPC is left\u2011shifted by 12 bits before sign extension.",
+                "JAL immediate is sign\u2011extended after shifting left by 1."
+            ]
+        },
+        {
+            "module_name": "alu",
+            "purpose": "Performs arithmetic and logical operations required by RV32I.",
+            "inputs": [
+                {
+                    "name": "op_a",
+                    "width": "32",
+                    "description": "First operand."
+                },
+                {
+                    "name": "op_b",
+                    "width": "32",
+                    "description": "Second operand."
+                },
+                {
+                    "name": "alu_op",
+                    "width": "4",
+                    "description": "ALU operation selector."
+                }
+            ],
+            "outputs": [
+                {
+                    "name": "result",
+                    "width": "32",
+                    "description": "ALU result."
+                },
+                {
+                    "name": "zero",
+                    "width": "1",
+                    "description": "Zero flag (result == 0)."
+                },
+                {
+                    "name": "negative",
+                    "width": "1",
+                    "description": "Negative flag (MSB of result)."
+                },
+                {
+                    "name": "overflow",
+                    "width": "1",
+                    "description": "Signed overflow flag."
+                }
+            ],
+            "internal_behavior": [
+                "Supports ADD, SUB, AND, OR, XOR, SLL, SRL, SRA, SLT, SLTU.",
+                "Overflow is set for signed addition/subtraction only."
+            ],
+            "depends_on": [],
+            "corner_cases": [
+                "SRA uses arithmetic shift; sign bit is replicated.",
+                "SLT/SLTU compare signed/unsigned values respectively."
+            ]
+        },
+        {
+            "module_name": "control_unit",
+            "purpose": "Decodes the opcode and function fields to generate control signals for the datapath.",
+            "inputs": [
+                {
+                    "name": "opcode",
+                    "width": "7",
+                    "description": "Opcode field of the instruction."
+                },
+                {
+                    "name": "funct3",
+                    "width": "3",
+                    "description": "funct3 field of the instruction."
+                },
+                {
+                    "name": "funct7",
+                    "width": "7",
+                    "description": "funct7 field of the instruction."
+                }
+            ],
+            "outputs": [
+                {
+                    "name": "alu_op",
+                    "width": "4",
+                    "description": "ALU operation code."
+                },
+                {
+                    "name": "alu_src",
+                    "width": "1",
+                    "description": "Selects ALU second operand source."
+                },
+                {
+                    "name": "mem_read",
+                    "width": "1",
+                    "description": "Enable data memory read."
+                },
+                {
+                    "name": "mem_write",
+                    "width": "1",
+                    "description": "Enable data memory write."
+                },
+                {
+                    "name": "mem_size",
+                    "width": "2",
+                    "description": "Load/store size: 00=byte, 01=halfword, 10=word."
+                },
+                {
+                    "name": "branch_taken",
+                    "width": "1",
+                    "description": "Indicates branch instruction."
+                },
+                {
+                    "name": "branch_cond",
+                    "width": "3",
+                    "description": "Branch condition code."
+                },
+                {
+                    "name": "pc_src",
+                    "width": "2",
+                    "description": "Selects next PC source."
+                }
+            ],
+            "internal_behavior": [
+                "Decodes R, I, S, B, U, J instruction types.",
+                "Sets mem_read/mem_write based on load/store instructions.",
+                "Sets branch_taken and branch_cond for B-type instructions.",
+                "Sets pc_src for JAL/JALR."
+            ],
+            "depends_on": [],
+            "corner_cases": [
+                "For JALR, pc_src is set to 01 (jump target) and write-back to rd occurs.",
+                "For LUI/AUIPC, mem_read/mem_write are 0."
+            ]
+        },
+        {
+            "module_name": "branch_unit",
+            "purpose": "Evaluates branch conditions and computes branch target address.",
+            "inputs": [
+                {
+                    "name": "branch_cond",
+                    "width": "3",
+                    "description": "Branch condition code from control unit."
+                },
+                {
+                    "name": "alu_zero",
+                    "width": "1",
+                    "description": "Zero flag from ALU."
+                },
+                {
+                    "name": "alu_negative",
+                    "width": "1",
+                    "description": "Negative flag from ALU."
+                },
+                {
+                    "name": "alu_overflow",
+                    "width": "1",
+                    "description": "Overflow flag from ALU."
+                },
+                {
+                    "name": "rs1",
+                    "width": "32",
+                    "description": "First operand for comparison."
+                },
+                {
+                    "name": "rs2",
+                    "width": "32",
+                    "description": "Second operand for comparison."
+                },
+                {
+                    "name": "pc",
+                    "width": "32",
+                    "description": "Current PC."
+                },
+                {
+                    "name": "imm",
+                    "width": "32",
+                    "description": "Sign\u2011extended branch immediate."
+                }
+            ],
+            "outputs": [
+                {
+                    "name": "branch_taken",
+                    "width": "1",
+                    "description": "True if branch condition satisfied."
+                },
+                {
+                    "name": "branch_target",
+                    "width": "32",
+                    "description": "Computed branch target address."
+                }
+            ],
+            "internal_behavior": [
+                "Implements BEQ, BNE, BLT, BGE, BLTU, BGEU logic.",
+                "Branch target = pc + 4 + imm."
+            ],
+            "depends_on": [],
+            "corner_cases": [
+                "All comparisons are performed on 32\u2011bit signed/unsigned values as required."
+            ]
+        },
+        {
+            "module_name": "load_store_unit",
+            "purpose": "Generates memory address, byte enable, and write data for load/store instructions.",
+            "inputs": [
+                {
+                    "name": "alu_result",
+                    "width": "32",
+                    "description": "Computed address from ALU."
+                },
+                {
+                    "name": "mem_read",
+                    "width": "1",
+                    "description": "Read enable."
+                },
+                {
+                    "name": "mem_write",
+                    "width": "1",
+                    "description": "Write enable."
+                },
+                {
+                    "name": "mem_size",
+                    "width": "2",
+                    "description": "Size code: 00=byte, 01=halfword, 10=word."
+                },
+                {
+                    "name": "write_data",
+                    "width": "32",
+                    "description": "Data to be written to memory."
+                },
+                {
+                    "name": "write_reg_data",
+                    "width": "32",
+                    "description": "Data from register file for store."
+                }
+            ],
+            "outputs": [
+                {
+                    "name": "data_addr",
+                    "width": "32",
+                    "description": "Address forwarded to data memory."
+                },
+                {
+                    "name": "data_we",
+                    "width": "1",
+                    "description": "Write enable for data memory."
+                },
+                {
+                    "name": "data_be",
+                    "width": "4",
+                    "description": "Byte enable mask for data memory."
+                },
+                {
+                    "name": "data_wdata",
+                    "width": "32",
+                    "description": "Data word written to memory."
+                },
+                {
+                    "name": "load_data",
+                    "width": "32",
+                    "description": "Data read from memory, sign/zero\u2011extended."
+                }
+            ],
+            "internal_behavior": [
+                "For stores, data_be is set to 1 for each byte written; data_wdata contains the full word with the relevant bytes updated.",
+                "For loads, load_data is sign\u2011extended for LB/LH and zero\u2011extended for LBU/LHU; LW returns the full word."
+            ],
+            "depends_on": [],
+            "corner_cases": [
+                "Byte/halfword loads/stores mask only the relevant bytes; other bytes are ignored."
+            ]
+        },
+        {
+            "module_name": "top_module",
+            "purpose": "Integrates all sub\u2011modules into a single\u2011cycle RV32I processor.",
+            "inputs": [
+                {
+                    "name": "clk",
+                    "width": "1",
+                    "description": "System clock."
+                },
+                {
+                    "name": "reset",
+                    "width": "1",
+                    "description": "Active\u2011high synchronous reset."
+                },
+                {
+                    "name": "instr_data",
+                    "width": "32",
+                    "description": "Instruction fetched from instruction memory."
+                },
+                {
+                    "name": "data_rdata",
+                    "width": "32",
+                    "description": "Data read from data memory."
+                }
+            ],
+            "outputs": [
+                {
+                    "name": "instr_addr",
+                    "width": "32",
+                    "description": "Address sent to instruction memory."
+                },
+                {
+                    "name": "data_addr",
+                    "width": "32",
+                    "description": "Address sent to data memory."
+                },
+                {
+                    "name": "data_wdata",
+                    "width": "32",
+                    "description": "Data written to data memory."
+                },
+                {
+                    "name": "data_we",
+                    "width": "1",
+                    "description": "Write enable for data memory."
+                },
+                {
+                    "name": "data_be",
+                    "width": "4",
+                    "description": "Byte enable for data memory."
+                }
+            ],
+            "internal_behavior": [
+                "PC register holds current program counter; updated each cycle based on pc_src and branch_taken.",
+                "Instruction fetch: instr_addr = PC.",
+                "Decode: opcode, funct3, funct7 extracted from instr_data.",
+                "Immediate generator produces imm.",
+                "Register file provides rs1 and rs2 data.",
+                "ALU performs operation based on alu_op and alu_src.",
+                "Branch unit evaluates branch condition; if taken, PC_next = branch_target.",
+                "Load/Store unit generates memory interface signals.",
+                "Write\u2011back: if instruction writes to rd, data is forwarded from ALU or load_data."
+            ],
+            "depends_on": [
+                "register_file",
+                "immediate_generator",
+                "alu",
+                "control_unit",
+                "branch_unit",
+                "load_store_unit"
+            ],
+            "corner_cases": [
+                "All operations complete within one clock cycle; no pipeline stages.",
+                "No hazard detection or forwarding logic is required because the design is single\u2011cycle."
+            ]
+        }
+    ]
+}
