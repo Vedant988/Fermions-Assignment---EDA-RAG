@@ -1,0 +1,297 @@
+{
+  "version": "v8-parent-child",
+  "run_timestamp": "2026-04-11T01:48:11",
+  "model": "openai/gpt-oss-20b",
+  "embed_model": "all-MiniLM-L6-v2",
+  "child_max_tokens": 120,
+  "top_k_children": 12,
+  "top_k_parents": 3,
+  "hyde": false,
+  "rrf_k": 60,
+  "max_input_tokens": 5500,
+  "num_questions": 10,
+  "total_parents": 614,
+  "total_children": 2910,
+  "results": [
+    {
+      "question_id": 1,
+      "question": "How do you structure the Verilog case statements in the Instruction Decoder to safely extract opcodes and route the correct sign-extended immediate logic for R, I, S, B, U, and J formats without inferring latches?",
+      "hyde_used": false,
+      "child_max_tokens": 120,
+      "prompt_tokens": 3157,
+      "parents_retrieved": [
+        {
+          "parent_id": "rv32ui_lw",
+          "section_title": "rv32ui Test: LW",
+          "rrf_score": 0.07696,
+          "child_matched": "- `TEST_LD_OP`: Load instruction correctness: compute effective address rs1+offset, load from memory. Tests: address adder, byte/halfword/word sign/zero extension logic."
+        },
+        {
+          "parent_id": "3",
+          "section_title": "2.1.3. Immediate Encoding Variants",
+          "rrf_score": 0.032522,
+          "child_matched": "There are a further two variants of the instruction formats (B/J) based on the handling of immediates, as shown in Base instruction formats immediate variants. ."
+        },
+        {
+          "parent_id": "2",
+          "section_title": "2.1.2. Base Instruction Formats",
+          "rrf_score": 0.029857,
+          "child_matched": "`[FIGURE: RISC-V base instruction formats. Each immediate subfield is labeled with the bit position (imm[x]) in the immediate value being produced, rather than the bit position within the instruction’s immediate field as is usually done.]`\nDecoding register specifiers is usually on the critical paths in implementations, and so the instruction format was chosen to keep all register specifiers at the same position in all formats at the expense of having to move immediate bits across formats (a property shared with RISC-IV aka. SPUR [ 8 ]). In practice, most immediates are either small or require all XLEN bits. We chose an asymmetric immediate split (12 bits in regular instructions plus a special load-upper-immediate instruction with 20 bits) to increase the opcode space available for regular instructions. Immediates are sign-extended because we did not observe a benefit to using zero extension for some immediates as in the MIPS ISA and wanted to keep the ISA as simple as possible."
+        }
+      ],
+      "answer": "**Verilog‑style instruction‑decoder – “no‑latch” combinational case**\n\nBelow is a compact, latch‑free template that shows how to pull the opcode out of the 32‑bit instruction, route the correct immediate‑format logic, and sign‑extend the immediate in a single combinational block.  \nAll outputs are driven in *every* branch of the `case`, so the synthesiser never has to infer a latch.\n\n```verilog\nmodule instr_decoder\n  #(parameter XLEN = 32)\n  (\n    input  wire [31:0]  inst,          // fetched instruction\n    output reg  [6:0]   opcode,        // 7‑bit opcode\n    output reg  [2:0]   funct3,        // 3‑bit funct3\n    output reg  [6:0]   funct7,        // 7‑bit funct7\n    output reg  [XLEN-1:0] imm,        // sign‑extended immediate\n    output reg  [4:0]   rs1, rs2, rd   // register specifiers\n  );\n\n  // ------------------------------------------------------------------\n  // 1.  Extract the fixed fields (no combinational hazard)\n  // ------------------------------------------------------------------\n  always @(*) begin\n    opcode = inst[6:0];\n    funct3 = inst[14:12];\n    funct7 = inst[31:25];\n    rs1    = inst[19:15];\n    rs2    = inst[24:20];\n    rd     = inst[11:7];\n\n    // ----------------------------------------------------------------\n    // 2.  Default values – guarantees every output is driven\n    // ----------------------------------------------------------------\n    imm = {XLEN{1'b0}};\n\n    // ----------------------------------------------------------------\n    // 3.  Decode the opcode and build the correct immediate\n    // ----------------------------------------------------------------\n    case (opcode)\n      // R‑type – no immediate\n      7'b0110011: imm = {XLEN{1'b0}};\n\n      // I‑type (loads, immediates, jalr)\n      7'b0000011, 7'b0010011, 7'b1100111: begin\n        // imm[31:20] → imm[XLEN-1:0] with sign‑extension\n        imm = {{(XLEN-12){inst[31]}}, inst[31:20]};\n      end\n\n      // S‑type (stores)\n      7'b0100011: begin\n        // imm[11:5] = inst[31:25], imm[4:0] = inst[11:7]\n        imm = {{(XLEN-12){inst[31]}},\n               inst[31:25],\n               inst[11:7]};\n      end\n\n      // B‑type (branches)\n      7'b1100011: begin\n        // imm[12] = inst[31], imm[10:5] = inst[30:25],\n        // imm[4:1] = inst[11:8], imm[11] = inst[7]\n        imm = {{(XLEN-13){inst[31]}},\n               inst[31],          // imm[12]\n               inst[7],           // imm[11]\n               inst[30:25],       // imm[10:5]\n               inst[11:8],        // imm[4:1]\n               1'b0};             // imm[0] = 0\n      end\n\n      // U‑type (lui, auipc)\n      7'b0110111, 7'b0010111: begin\n        // imm[31:12] = inst[31:12], lower 12 bits = 0\n        imm = {inst[31:12], 12'b0};\n      end\n\n      // J‑type (jal)\n      7'b1101111: begin\n        // imm[20] = inst[31], imm[10:1] = inst[30:21],\n        // imm[11] = inst[20], imm[19:12] = inst[19:12]\n        imm = {{(XLEN-21){inst[31]}},\n               inst[31],          // imm[20]\n               inst[19:12],       // imm[19:12]\n               inst[20],          // imm[11]\n               inst[30:21],       // imm[10:1]\n               1'b0};             // imm[0] = 0\n      end\n\n      // ----------------------------------------------------------------\n      // 4.  Default case – keep imm zero (already set above)\n      // ----------------------------------------------------------------\n      default: imm = {XLEN{1'b0}};\n    endcase\n  end\n\nendmodule\n```\n\n### Why this never infers latches\n\n| Technique | What it does | Why it avoids latches |\n|-----------|--------------|-----------------------|\n| **`always @(*)`** | Combines all combinational logic into one block | Synthesis treats it as a pure combinational netlist |\n| **Default assignments before the `case`** | Every output gets a value regardless of the opcode | No “unassigned” path that would require a latch |\n| **Blocking assignments (`=`)** | All outputs are updated in the same evaluation order | No race conditions that could create a latch |\n| **Explicit `default` branch** | Covers any opcode that isn’t listed | Guarantees coverage of all 128 opcode values |\n| **No `else` or `if` chains that skip assignments** | Every path assigns all outputs | Prevents inferred memory‑like storage |\n\n### Field positions (for reference)\n\n| Field | Bits in instruction | Immediate source (if any) |\n|-------|---------------------|---------------------------|\n| `opcode` | `[6:0]` | – |\n| `rd` | `[11:7]` | – |\n| `funct3` | `[14:12]` | – |\n| `rs1` | `[19:15]` | – |\n| `rs2` | `[24:20]` | – |\n| `funct7` | `[31:25]` | – |\n| `imm` | – | See the table above for each format |\n\n### Quick sanity check\n\n* **`LW` (load word)** – opcode `0000011`, I‑type.  \n  The decoder will take `inst[31:20]`, sign‑extend it, and place it in `imm`.  \n  The test vectors in the JSON (e.g., test 2, offset 0) expect the effective address to be `rs1 + imm`.  \n  The RTL contract “compute effective address rs1+offset” is satisfied by the `imm` logic shown.\n\n* **`SW` (store word)** – opcode `0100011`, S‑type.  \n  The decoder concatenates `inst[31:25]` and `inst[11:7]`, sign‑extends, and assigns to `imm`.  \n  This matches the “address adder” requirement in the test suite.\n\n* **`B`‑type branches** – opcode `1100011`.  \n  The decoder builds the 13‑bit signed offset (including the implicit LSB 0) and sign‑extends"
+    },
+    {
+      "question_id": 2,
+      "question": "In a SystemVerilog top-level module for a single-cycle RV32I core, how should the clock, synchronous reset, and flat memory interface ports be defined to ensure clean compilation and compatibility with a Verilator C++ testbench?",
+      "hyde_used": false,
+      "child_max_tokens": 120,
+      "prompt_tokens": 700,
+      "parents_retrieved": [
+        {
+          "parent_id": "picorv32_picosoc_icebreaker_3",
+          "section_title": "always @(posedge clk) begin",
+          "rrf_score": 0.032522,
+          "child_matched": "```verilog\nalways @(posedge clk) begin\n reset_cnt <= reset_cnt + !resetn;\n end"
+        },
+        {
+          "parent_id": "picorv32_picosoc_icebreaker_tb_3",
+          "section_title": "always @(posedge clk) begin",
+          "rrf_score": 0.029631,
+          "child_matched": "```verilog\nalways @(posedge clk) begin\n cycle_cnt <= cycle_cnt + 1;\n end"
+        },
+        {
+          "parent_id": "picorv32_scripts_presyn_README_0",
+          "section_title": "picorv32_scripts_presyn_README",
+          "rrf_score": 0.016393,
+          "child_matched": "A simple example for how to use Yosys to \"pre-synthesize\" PicoRV32 in\na way that can utilize an external memory module for the register file."
+        }
+      ],
+      "answer": "[LLM ERROR] API returned empty content — input may have been filtered or exceeded limit silently."
+    },
+    {
+      "question_id": 3,
+      "question": "Write the Verilog monitor logic required in the data memory interface to detect a store operation to the `tohost` address (0x80001000) and extract the pass/fail code for the simulation environment.",
+      "hyde_used": false,
+      "child_max_tokens": 120,
+      "prompt_tokens": 1041,
+      "parents_retrieved": [
+        {
+          "parent_id": "picorv32_scripts_romload_testbench_6",
+          "section_title": "always @(posedge clk) begin",
+          "rrf_score": 0.02837,
+          "child_matched": "```verilog\nalways @(posedge clk) begin\n mem_ready <= 0;\n if (mem_valid && !mem_ready) begin\n mem_ready <= 1;\n mem_rdata <= 'bx;\n case (1)\n mem_addr < MEM_SIZE: begin\n`ifdef MEM8BIT\n if (|mem_wstrb) begin\n if (mem_wstrb[0]) memory[mem_addr + 0] <= mem_wdata[ 7: 0];\n if (mem_wstrb[1]) memory[mem_addr + 1] <= mem_wdata[15: 8];\n if (mem_wstrb[2]) memory[mem_addr + 2] <= mem_wdata[23:16];\n if (mem_wstrb[3]) memory[mem_addr + 3] <= mem_wdata[31:24];\n end else begin\n mem_rdata <= {memory[mem_addr+3], memory[mem_addr+2], memory[mem_addr+1], memory[mem_addr]};\n end\n`else\n if ((|mem_wstrb) && (mem_addr >= `ROM_SIZE)) begin\n if (mem_wstrb[0]) memory[mem_addr >> 2][ 7: 0] <= mem_wdata[ 7: 0];\n if (mem_wstrb[1]) memory[mem_addr >> 2][15: 8] <= mem_wdata[15: 8];\n if (mem_wstrb[2]) memory[mem_addr >> 2][23:16] <= mem_wdata[23:16];\n if (mem_wstrb[3]) memory[mem_addr >> 2][31:24] <= mem_wdata[31:24];\n end else begin\n mem_rdata <= memory[mem_addr >> 2];\n end\n`endif\n end\n mem_addr == 32'h 1000_0000: begin\n $write(\"%c\", mem_wdata[7:0]);\n end\n endcase\n end\n if (mem_valid && mem_ready) begin\n`ifdef FIRMWARE_DEBUG_ADDR\n firmware_dbg(mem_addr);\n`endif\n if ((mem_wstrb == 4'h0) && (mem_rdata === 32'bx)) $display(\"READ FROM UNITIALIZED ADDR=%x\", mem_addr);\n`ifdef VERBOSE_MEM\n if (|mem_wstrb)\n $display(\"WR: ADDR=%x DATA=%x MASK=%b\", mem_addr, mem_wdata, mem_wstrb);\n else\n $display(\"RD: ADDR=%x DATA=%x%s\", mem_addr, mem_rdata, mem_instr ? \" INSN\" : \"\");\n`endif\n if (^mem_addr === 1'bx ||\n (mem_wstrb[0] && ^mem_wdata[ 7: 0] == 1'bx) ||\n (mem_wstrb[1] && ^mem_wdata[15: 8] == 1'bx) ||\n (mem_wstrb[2] && ^mem_wdata[23:16] == 1'bx) ||\n (mem_wstrb[3] && ^mem_wdata[31:24] == 1'bx)) begin\n $display(\"CRITICAL UNDEF MEM TRANSACTION\");\n $finish;\n end\n end\n end"
+        },
+        {
+          "parent_id": "picorv32_testbench_wb_12",
+          "section_title": "module wb_ram #(",
+          "rrf_score": 0.016393,
+          "child_matched": "```verilog\nmodule wb_ram #(\n parameter depth = 256,\n parameter memfile = \"\",\n parameter VERBOSE = 0\n) (\n input wb_clk_i,\n input wb_rst_i,"
+        },
+        {
+          "parent_id": "picorv32_README_36",
+          "section_title": "Write Transfer",
+          "rrf_score": 0.016393,
+          "child_matched": "In a write transfer `mem_wstrb` is not 0 and `mem_rdata` is unused. The memory\nwrite the data at `mem_wdata` to the address `mem_addr` and acknowledges the\ntransfer by asserting `mem_ready`."
+        }
+      ],
+      "answer": "**Verilog monitor for the `tohost` address (0x80001000)**  \n\nAdd the following logic inside the `always @(posedge clk)` block that already\nhandles the memory interface (right after the `mem_ready` / `mem_rdata`\nassignments).  The code watches for a *write* (`mem_wstrb != 4'h0`) to the\nexact address `32'h80001000` and extracts the 32‑bit value written.  The\nsimulation environment can then decide whether the test passed or failed\nby inspecting the low byte (or the full word) of `mem_wdata`.\n\n```verilog\n// ---------------------------------------------------------------------------\n//  Monitor for the tohost address (0x80001000)\n// ---------------------------------------------------------------------------\n//  Detect a store operation to the tohost address and capture the\n//  pass/fail code written by the DUT.\n//\n//  Register names used:\n//    mem_valid   – 1 when the DUT is driving a memory transaction\n//    mem_ready   – 1 when the memory interface acknowledges the transaction\n//    mem_wstrb   – 4‑bit write strobe (bit i enables byte i of mem_wdata)\n//    mem_wdata   – 32‑bit data being written\n//    mem_addr    – 32‑bit address of the transaction\n//    tests_passed – output flag used by the testbench to indicate success\n//\n//  Hex constants:\n//    TOHOST_ADDR = 32'h80001000\n//\n//  Pass/fail convention (RISC‑V tohost):\n//    0x00000001  →  PASS\n//    0x00000000  →  FAIL\n//    (any other value is treated as FAIL for safety)\n// ---------------------------------------------------------------------------\n\nalways @(posedge clk) begin\n    // ... existing code that sets mem_ready, mem_rdata, etc. ...\n\n    // -----------------------------------------------------------------------\n    //  Detect a write to the tohost address\n    // -----------------------------------------------------------------------\n    if (mem_valid && mem_ready && (mem_wstrb != 4'h0) &&\n        (mem_addr == 32'h80001000)) begin\n        // Extract the 32‑bit value written to tohost\n        // (the DUT may write only a byte/half‑word; we still read the full word)\n        // The pass/fail code is conventionally stored in the low byte.\n        // We use the full word for robustness.\n        if (mem_wdata == 32'h00000001) begin\n            tests_passed <= 1'b1;          // PASS\n            $display(\"[SIM] Test passed (tohost = 0x%08x)\", mem_wdata);\n        end else begin\n            tests_passed <= 1'b0;          // FAIL\n            $display(\"[SIM] Test failed (tohost = 0x%08x)\", mem_wdata);\n        end\n\n        // Optional: stop the simulation immediately after the tohost write\n        // $finish;\n    end\n\n    // ... remaining existing code ...\nend\n```\n\n### How it works\n\n1. **Trigger condition**  \n   - `mem_valid && mem_ready` guarantees that the DUT has issued a valid\n     transaction and the memory interface has acknowledged it in the same\n     cycle (no wait‑states).  \n   - `(mem_wstrb != 4'h0)` ensures that the transaction is a *write* (any\n     non‑zero write strobe).  \n   - `(mem_addr == 32'h80001000)` matches the tohost address.\n\n2. **Pass/fail extraction**  \n   - The 32‑bit value written to tohost is read from `mem_wdata`.  \n   - The conventional pass/fail codes are `0x00000001` (PASS) and\n     `0x00000000` (FAIL).  The code above treats any other value as FAIL\n     for safety.\n\n3. **Simulation signalling**  \n   - `tests_passed` is set accordingly; the testbench can use this flag to\n     decide whether to report success or failure.  \n   - `$display` statements provide a human‑readable trace.  \n   - Optionally, `$finish` can be called to terminate the simulation\n     immediately after the tohost write.\n\n### Placement\n\nInsert the block **after** the existing `if (mem_valid && !mem_ready)` and\n`if (mem_valid && mem_ready)` sections, but before any `$finish` or\n`$display` that might terminate the simulation.  This ensures that the\nmonitor sees the transaction in the same cycle it is acknowledged."
+    },
+    {
+      "question_id": 4,
+      "question": "How do you implement the combinational Verilog logic to generate the 4-bit `dmem_wmask` and align the `rs2` write data for SB, SH, and SW instructions based on the lower 2 bits of the ALU calculated address?",
+      "hyde_used": false,
+      "child_max_tokens": 120,
+      "prompt_tokens": 1334,
+      "parents_retrieved": [
+        {
+          "parent_id": "picorv32_picosoc_icebreaker_4",
+          "section_title": "always @(posedge clk) begin",
+          "rrf_score": 0.03101,
+          "child_matched": "```verilog\nalways @(posedge clk) begin\n if (!resetn) begin\n gpio <= 0;\n end else begin\n iomem_ready <= 0;\n if (iomem_valid && !iomem_ready && iomem_addr[31:24] == 8'h 03) begin\n iomem_ready <= 1;\n iomem_rdata <= gpio;\n if (iomem_wstrb[0]) gpio[ 7: 0] <= iomem_wdata[ 7: 0];\n if (iomem_wstrb[1]) gpio[15: 8] <= iomem_wdata[15: 8];\n if (iomem_wstrb[2]) gpio[23:16] <= iomem_wdata[23:16];\n if (iomem_wstrb[3]) gpio[31:24] <= iomem_wdata[31:24];\n end\n end\n end"
+        },
+        {
+          "parent_id": "picorv32_scripts_romload_testbench_6",
+          "section_title": "always @(posedge clk) begin",
+          "rrf_score": 0.029631,
+          "child_matched": "```verilog\nalways @(posedge clk) begin\n mem_ready <= 0;\n if (mem_valid && !mem_ready) begin\n mem_ready <= 1;\n mem_rdata <= 'bx;\n case (1)\n mem_addr < MEM_SIZE: begin\n`ifdef MEM8BIT\n if (|mem_wstrb) begin\n if (mem_wstrb[0]) memory[mem_addr + 0] <= mem_wdata[ 7: 0];\n if (mem_wstrb[1]) memory[mem_addr + 1] <= mem_wdata[15: 8];\n if (mem_wstrb[2]) memory[mem_addr + 2] <= mem_wdata[23:16];\n if (mem_wstrb[3]) memory[mem_addr + 3] <= mem_wdata[31:24];\n end else begin\n mem_rdata <= {memory[mem_addr+3], memory[mem_addr+2], memory[mem_addr+1], memory[mem_addr]};\n end\n`else\n if ((|mem_wstrb) && (mem_addr >= `ROM_SIZE)) begin\n if (mem_wstrb[0]) memory[mem_addr >> 2][ 7: 0] <= mem_wdata[ 7: 0];\n if (mem_wstrb[1]) memory[mem_addr >> 2][15: 8] <= mem_wdata[15: 8];\n if (mem_wstrb[2]) memory[mem_addr >> 2][23:16] <= mem_wdata[23:16];\n if (mem_wstrb[3]) memory[mem_addr >> 2][31:24] <= mem_wdata[31:24];\n end else begin\n mem_rdata <= memory[mem_addr >> 2];\n end\n`endif\n end\n mem_addr == 32'h 1000_0000: begin\n $write(\"%c\", mem_wdata[7:0]);\n end\n endcase\n end\n if (mem_valid && mem_ready) begin\n`ifdef FIRMWARE_DEBUG_ADDR\n firmware_dbg(mem_addr);\n`endif\n if ((mem_wstrb == 4'h0) && (mem_rdata === 32'bx)) $display(\"READ FROM UNITIALIZED ADDR=%x\", mem_addr);\n`ifdef VERBOSE_MEM\n if (|mem_wstrb)\n $display(\"WR: ADDR=%x DATA=%x MASK=%b\", mem_addr, mem_wdata, mem_wstrb);\n else\n $display(\"RD: ADDR=%x DATA=%x%s\", mem_addr, mem_rdata, mem_instr ? \" INSN\" : \"\");\n`endif\n if (^mem_addr === 1'bx ||\n (mem_wstrb[0] && ^mem_wdata[ 7: 0] == 1'bx) ||\n (mem_wstrb[1] && ^mem_wdata[15: 8] == 1'bx) ||\n (mem_wstrb[2] && ^mem_wdata[23:16] == 1'bx) ||\n (mem_wstrb[3] && ^mem_wdata[31:24] == 1'bx)) begin\n $display(\"CRITICAL UNDEF MEM TRANSACTION\");\n $finish;\n end\n end\n end"
+        },
+        {
+          "parent_id": "picorv32_testbench_wb_15",
+          "section_title": "always @(posedge wb_clk_i) begin",
+          "rrf_score": 0.016393,
+          "child_matched": "```verilog\nalways @(posedge wb_clk_i) begin\n adr_r <= wb_adr_i;\n // Ack generation\n wb_ack_o <= valid & !wb_ack_o;\n if (wb_rst_i)\n begin\n adr_r <= {32{1'b0}};\n wb_ack_o <= 1'b0;\n end\n end"
+        }
+      ],
+      "answer": "**Combinational logic for the 4‑bit write‑mask (`dmem_wmask`) and the aligned store data (`dmem_wdata`)**\n\nThe store‑unit receives the ALU result (`alu_res`) as the byte‑address of the target location and the source register value (`rs2`).  \nThe lower two bits of the address (`alu_res[1:0]`) determine which byte lanes are active and how the 32‑bit `rs2` value must be shifted so that"
+    },
+    {
+      "question_id": 5,
+      "question": "Describe the Verilog implementation of a dual-read, single-write RV32I Register File that natively enforces the x0 hardwired-to-zero invariant, specifically addressing the write-enable gating required to pass TEST_RR_ZERODEST.",
+      "hyde_used": false,
+      "child_max_tokens": 120,
+      "prompt_tokens": 1254,
+      "parents_retrieved": [
+        {
+          "parent_id": "picorv32_shell_20",
+          "section_title": "_any_ RTL implementation of the RV32I core.)",
+          "rrf_score": 0.030214,
+          "child_matched": "_any_ RTL implementation of the RV32I core.)"
+        },
+        {
+          "parent_id": "1",
+          "section_title": "2.1.1. Programmers' Model for Base Integer ISA",
+          "rrf_score": 0.030092,
+          "child_matched": "RISC-V base unprivileged integer register state. shows the unprivileged state for the base integer ISA. For RV32I, the 32 x registers are each 32 bits wide, i.e., XLEN=32 . Register x0 is hardwired with all bits equal to 0. General purpose registers x1-x31 hold values that various instructions interpret as a collection of Boolean values, or as two’s complement signed binary integers or unsigned binary integers."
+        },
+        {
+          "parent_id": "picorv32_picorv32_43",
+          "section_title": "endmodule",
+          "rrf_score": 0.016393,
+          "child_matched": "// This is a simple example implementation of PICORV32_REGS.\n// Use the PICORV32_REGS mechanism if you want to use custom\n// memory resources to implement the processor register file.\n// Note that your implementation must match the requirements of\n// the PicoRV32 configuration. (e.g. QREGS, etc)\n```"
+        }
+      ],
+      "answer": "**Dual‑Read / Single‑Write RV32I Register File – “Hard‑wired‑to‑Zero” Implementation**\n\n| Feature | Implementation Detail |\n|---------|-----------------------|\n| **Register set** | 32 × 32‑bit architectural registers (`x0 … x31`).  `x0` is hard‑wired to `32'h00000000`. |\n| **Read ports** | Two combinational read ports (`rs1`, `rs2`).  Each port returns `32'b0` when the source register is `x0`. |\n| **Write port** | One synchronous write port (`rd`, `wdata`).  The write is enabled only when `rd ≠ 5'd0`. |\n| **Write‑enable gating** | `we & (rd != 5'd0)` – this is the only gating that guarantees the x0 invariant and is the key to passing the **TEST_RR_ZERODEST** test. |\n| **Reset** | All registers are reset to `32'h00000000`.  The reset logic can simply zero the entire array; the hard‑wired zero is enforced by the read mux and the write‑enable gate. |\n| **Memory model** | A 32‑word, 32‑bit RAM (or a set of 32 registers) with two read ports and one write port.  The RAM is accessed on the rising edge of `clk`. |\n\n---\n\n### Verilog Skeleton\n\n```verilog\nmodule rv32i_rf (\n    input  wire          clk,          // System clock\n    input  wire          we,           // Write enable (from the core)\n    input  wire [4:0]    rd,           // Destination register index\n    input  wire [4:0]    rs1,          // Source register 1 index\n    input  wire [4:0]    rs2,          // Source register 2 index\n    input  wire [31:0]   wdata,        // Data to write\n    output wire [31:0]   rdata1,       // Read data 1\n    output wire [31:0]   rdata2        // Read data 2\n);\n\n    // 32 × 32‑bit register file\n    reg [31:0] rf [0:31];\n\n    // ------------------------------------------------------------------\n    // 1) Write logic – single‑write, synchronous\n    // ------------------------------------------------------------------\n    // The write is gated so that writes to x0 (rd == 5'd0) are ignored.\n    // This is the only place where the x0 invariant is enforced.\n    always @(posedge clk) begin\n        if (we && (rd != 5'd0)) begin\n            rf[rd] <= wdata;\n        end\n    end\n\n    // ------------------------------------------------------------------\n    // 2) Read logic – dual‑read, combinational\n    // ------------------------------------------------------------------\n    // Each read port returns zero when the source register is x0.\n    // This guarantees that any read of x0 yields 32'h00000000.\n    assign rdata1 = (rs1 == 5'd0) ? "
+    },
+    {
+      "question_id": 6,
+      "question": "How do you design the Verilog Next-PC (NPC) multiplexer and branch condition evaluation logic to correctly route either `PC+4` or `PC+imm` synchronously, ensuring no timing loops?",
+      "hyde_used": false,
+      "child_max_tokens": 120,
+      "prompt_tokens": 2157,
+      "parents_retrieved": [
+        {
+          "parent_id": "rv32ui_bne",
+          "section_title": "rv32ui Test: BNE",
+          "rrf_score": 0.218964,
+          "child_matched": "- `TEST_BR2_OP_TAKEN`: Branch taken: condition is true, PC must jump to target. Tests: branch condition logic, PC update to PC+imm.\n- `TEST_BR2_OP_NOTTAKEN`: Branch not taken: condition is false, PC must fall through to PC+4. Tests: branch condition logic, sequential PC increment."
+        },
+        {
+          "parent_id": "picorv32_scripts_torture_testbench_1",
+          "section_title": "always @(posedge clk) begin",
+          "rrf_score": 0.027973,
+          "child_matched": "```verilog\nalways @(posedge clk) begin\n if (resetn) begin\n next_x32 = x32;\n next_x32 = next_x32 ^ (next_x32 << 13);\n next_x32 = next_x32 ^ (next_x32 >> 17);\n next_x32 = next_x32 ^ (next_x32 << 5);\n x32 <= next_x32;\n end\n end"
+        },
+        {
+          "parent_id": "picorv32_testbench_17",
+          "section_title": "always @(posedge clk) begin",
+          "rrf_score": 0.014706,
+          "child_matched": "```verilog\nalways @(posedge clk) begin\n if (axi_test) begin\n xorshift64_next;\n {fast_axi_transaction, async_axi_transaction, delay_axi_transaction} <= xorshift64_state;\n end\n end"
+        }
+      ],
+      "answer": "**Key idea**\n\n* The **branch condition** is evaluated combinationally from the two source registers and the opcode/func3 of the instruction.  \n* The **next‑PC (NPC)** is a pure combinational function of the current PC, the branch‑taken flag and the sign‑extended B‑type immediate.  \n* The **PC register** is updated **synchronously** on the rising edge of `clk` (or reset).  \n* No combinational loop is created because the PC register never feeds back into the combinational branch‑logic in the same clock cycle – the feedback path is the sequential register.\n\nBelow is a minimal, synthesizable RTL skeleton that satisfies the test‑suite requirements and can be dropped into a Pico‑RV32‑style core.\n\n```verilog\n// ---------------------------------------------------------------------------\n//  Branch condition & NPC logic (B-type instructions)\n// ---------------------------------------------------------------------------\n\nmodule branch_npc (\n    input  logic        clk,          // system clock\n    input  logic        resetn,       // active‑low reset\n\n    // Current PC (32‑bit)\n    input  logic [31:0] pc,\n\n    // Current instruction (32‑bit)\n    input  logic [31:0] inst,\n\n    // Source register values (from the register file)\n    input  logic [31:0] rs1,\n    input  logic [31:0] rs2,\n\n    // Output: next PC value\n    output logic [31:0] next_pc\n);\n\n    // -----------------------------------------------------------------------\n    // 1. Decode the B‑type immediate\n    // -----------------------------------------------------------------------\n    // B‑type imm[12:0] layout:\n    //   imm[12] = inst[31]\n    //   imm[10:5] = inst[30:25]\n    //   imm[4:1] = inst[11:8]\n    //   imm[11] = inst[7]\n    //   imm[0]  = 0\n    // -----------------------------------------------------------------------\n    logic [12:0] imm12;\n    assign imm12[12] = inst[31];\n    assign imm12[10:5] = inst[30:25];\n    assign imm12[4:1] = inst[11:8];\n    assign imm12[11] = inst[7];\n    assign imm12[0]  = 1'b0;          // LSB is always zero\n\n    // Sign‑extend to 32 bits and shift left 1 (already zero‑extended)\n    logic [31:0] imm32;\n    assign imm32 = {{19{imm12[12]}}, imm12} << 1;\n\n    // -----------------------------------------------------------------------\n    // 2. Branch condition evaluation (combinational)\n    // -----------------------------------------------------------------------\n    // Only BNE is exercised in the test‑suite, but the logic can be\n    // extended to all B‑type opcodes by adding a `case` on `inst[6:0]`\n    // and `inst[14:12]` (func3).  For BNE (func3 = 001) the condition\n    // is `rs1 != rs2`.\n    // -----------------------------------------------------------------------\n    logic branch_taken;\n    always_comb begin\n        // Default: not taken\n        branch_taken = 1'b0;\n\n        // Decode opcode (7‑bit) and func3 (3‑bit)\n        case (inst[6:0])\n            7'b1100011: begin // B‑type\n                case (inst[14:12])\n                    3'b001: branch_taken = (rs1 != rs2); // BNE\n                    // other B‑type ops (BEQ, BLT, BGE, BLTU, BGEU) would\n                    // be added here\n                    default: branch_taken = 1'b0;\n                endcase\n            end\n            default: branch_taken = 1'b0;\n        endcase\n    end\n\n    // -----------------------------------------------------------------------\n    // 3. Next‑PC combinational multiplexer\n    // -----------------------------------------------------------------------\n    // PC + 4 is always available; PC + imm is used only when the\n    // branch condition is true.\n    // -----------------------------------------------------------------------\n    logic [31:0] pc_plus_4;\n    assign pc_plus_4 = pc + 4;\n\n    logic [31:0] pc_plus_imm;\n    assign pc_plus_imm = pc + imm32;\n\n    // NPC mux\n    assign next_pc = branch_taken ? pc_plus_imm : pc_plus_4;\n\nendmodule\n```\n\n### Why this design is safe\n\n| Concern | How it is addressed |\n|---------|---------------------|\n| **Timing loop** | `next_pc` is a pure combinational function of `pc`, `branch_taken`, and `imm32`.  The only feedback path is the sequential register that stores `pc`.  The combinational block never reads `next_pc` itself. |\n| **Synchronous PC update** | The PC register (not shown here) would be written in an `always_ff @(posedge clk or negedge resetn)` block: `pc <= next_pc;`.  This guarantees that the PC changes only on a clock edge. |\n| **Correct branch target** | The B‑type immediate is extracted exactly as defined in the RV32I spec, sign‑extended, and shifted left one bit.  Adding `pc` yields the correct target address. |\n| **No hazards** | The combinational branch condition uses the *current* values of `rs1` and `rs2`.  If the instruction that writes to one of those registers is in the same cycle, the test‑suite’s `TEST_BR2_SRC12_BYPASS` macro will exercise the bypass logic in the datapath (not shown).  The NPC logic itself does not introduce a hazard. |\n\n### Integration into a Pico‑RV32‑style core\n\n```verilog\n// PC register (synchronous)\nalways_ff @(posedge clk or negedge resetn) begin\n    if (!resetn)\n        pc <= 32'h0;\n    else\n        pc <= next_pc;\nend\n```\n\nThe `branch_npc` module can be instantiated in the fetch/decode stage, feeding its `next_pc` into the PC register.  All other pipeline stages (decode, execute, memory, write‑back) can use the same `pc` value for PC‑relative addressing or for reporting the PC of the current instruction.\n\n---\n\n**Summary**\n\n* Extract the B‑type immediate, sign‑extend, and shift left 1.  \n* Evaluate the branch condition combinationally (`rs1 != rs2` for BNE).  \n* Use a combinational multiplexer to select `pc + 4` or `pc + imm`.  \n* Update the PC register synchronously on `clk`.  \n\nThis pattern guarantees that the NPC logic is free of combinational loops, meets the timing constraints of a synchronous design, and satisfies the `TEST_BR2_OP_TAKEN` / `TEST_BR2_OP_NOTTAKEN` test cases in the RV32UI test suite."
+    },
+    {
+      "question_id": 7,
+      "question": "Provide the Verilog structural mapping and control signal assignments needed to multiplex data from the Register File, through the ALU, and back to the Register File write-port during the execution of a standard R-type instruction.",
+      "hyde_used": false,
+      "child_max_tokens": 120,
+      "prompt_tokens": 1837,
+      "parents_retrieved": [
+        {
+          "parent_id": "picorv32_README_12",
+          "section_title": "ENABLE_REGS_DUALPORT (default = 1)",
+          "rrf_score": 0.030622,
+          "child_matched": "The register file can be implemented with two or one read ports. A dual ported\nregister file improves performance a bit, but can also increase the size of\nthe core."
+        },
+        {
+          "parent_id": "picorv32_README_39",
+          "section_title": "setq qd, rs",
+          "rrf_score": 0.027799,
+          "child_matched": "This instruction copies the value from a general-purpose register to a\nq-register."
+        },
+        {
+          "parent_id": "4",
+          "section_title": "2.1.4. Integer Computational Instructions",
+          "rrf_score": 0.016393,
+          "child_matched": "Most integer computational instructions operate on XLEN bits of values held in the integer register file. Integer computational instructions are either encoded as register-immediate operations using the I-type format or as register-register operations using the R-type format. The destination is register rd for both register-immediate and register-register instructions. No integer computational instructions cause arithmetic exceptions."
+        }
+      ],
+      "answer": "**Verilog‑style structural mapping for a standard R‑type instruction**\n\n| Stage | Source | Destination | Control signal(s) | Notes |\n|-------|--------|-------------|-------------------|-------|\n| **1. Register‑file read** | `rs1` (bits [19:15] of the instruction) → `read_addr1`<br>`rs2` (bits [24:20]) → `read_addr2` | `read_data1`, `read_data2` | `RegRead1`, `RegRead2` (both asserted for R‑type) | Dual‑ported register file (default `ENABLE_REGS_DUALPORT = 1`) allows two simultaneous reads. |\n| **2. ALU input mux** | `read_data1` → `ALU_A`<br>`read_data2` → `ALU_B` | `ALU_A`, `ALU_B` | `ALUSrc = 0` (select register source for both operands) | For R‑type the second operand is always a register. |\n| **3. ALU** | `ALU_A`, `ALU_B` → `ALU_out` | `ALU_op` | `ALUOp` derived from `funct3` (bits [14:12]) and `funct7` (bits [31:25]) | Example: `ALUOp = {funct7[5], funct3}` selects ADD, SUB, SLL, etc. |\n| **4. Write‑back mux** | `ALU_out` → `WB_data` | `MemtoReg = 0` (select ALU output) | For R‑type the result comes from the ALU. |\n| **5. Register‑file write** | `rd` (bits [11:7]) → `write_addr`<br>`WB_data` → `write_data` | `write_enable = RegWrite` | `RegWrite = 1` for R‑type; `write_enable` asserted only when `RegWrite` is high. |\n\n---\n\n### Control‑signal assignments for an R‑type instruction\n\n| Signal | Value | Reason |\n|--------|-------|--------|\n| `RegWrite` | `1` | R‑type writes to `rd`. |\n| `ALUSrc` | `0` | Both ALU operands come from registers. |\n| `MemRead` | `0` | No memory access. |\n| `MemWrite` | `0` | No memory access. |\n| `MemtoReg` | `0` | Result comes from ALU, not memory. |\n| `ALUOp` | `{funct7[5], funct3}` | Decodes the specific R‑type operation (ADD, SUB, SLL, etc.). |\n\n---\n\n### Minimal structural Verilog snippet\n\n```verilog\nmodule rtype_exec (\n    input  wire [31:0] instr,          // 32‑bit instruction word\n    input  wire [31:0] regfile_data1,  // output of read port 1\n    input  wire [31:0] regfile_data2,  // output of read port 2\n    output wire [4:0]  read_addr1,     // rs1\n    output wire [4:0]  read_addr2,     // rs2\n    output wire [4:0]  write_addr,     // rd\n    output wire [31:0] write_data,     // data to write back\n    output wire        write_enable,   // RegWrite\n    input  wire [6:0]  opcode,         // bits[6:0]\n    input  wire [2:0]  funct3,         // bits[14:12]\n    input  wire [6:0]  funct7          // bits[31:25]\n);\n\n    // ---- 1. Decode register addresses ----\n    assign read_addr1  = instr[19:15];   // rs1\n    assign read_addr2  = instr[24:20];   // rs2\n    assign write_addr  = instr[11:7];    // rd\n\n    // ---- 2. ALU operands ----\n    wire [31:0] alu_a = regfile_data1;   // rs1 value\n    wire [31:0] alu_b = regfile_data2;   // rs2 value\n\n    // ---- 3. ALU operation ----\n    wire [31:0] alu_out;\n    wire [3:0]  alu_op = {funct7[5], funct3}; // simple encoding\n\n    alu_core u_alu (\n        .a      (alu_a),\n        .b      (alu_b),\n        .op     (alu_op),\n        .result (alu_out)\n    );\n\n    // ---- 4. Write‑back mux (ALU result only for R‑type) ----\n    assign write_data = alu_out;\n\n    // ---- 5. Write enable ----\n    assign write_enable = 1'b1;   // RegWrite asserted for R‑type\n\nendmodule\n```\n\n**Notes**\n\n* The `alu_core` module is a black‑box that implements the R‑type operations (ADD, SUB, SLL, SRL, SRA, etc.) based on the 4‑bit `alu_op` field derived from `funct3` and the most‑significant bit of `funct7`.  \n* The register file is assumed to be dual‑ported (`ENABLE_REGS_DUALPORT = 1`), so `read_addr1` and `read_addr2` can be asserted simultaneously.  \n* No memory‑access control signals (`MemRead`, `MemWrite`, `MemtoReg`) are asserted for a pure R‑type instruction.  \n* The control signals shown above are the minimal set required to route data from the register file, through the ALU, and back to the register file write‑port for a standard R‑type instruction."
+    },
+    {
+      "question_id": 8,
+      "question": "Describe the Verilog multiplexing and bit-slicing logic required in the memory writeback stage to properly shift, sign-extend (LB, LH), or zero-extend (LBU, LHU) the 32-bit raw read data from the data memory.",
+      "hyde_used": false,
+      "child_max_tokens": 120,
+      "prompt_tokens": -1,
+      "parents_retrieved": [
+        {
+          "parent_id": "11",
+          "section_title": "2.1.6. Load and Store Instructions",
+          "rrf_score": 0.032787,
+          "child_matched": "The LW instruction loads a 32-bit value from memory into rd . LH loads a 16-bit value from memory, then sign-extends to 32-bits before storing in rd . LHU loads a 16-bit value from memory but then zero extends to 32-bits before storing in rd . LB and LBU are defined analogously for 8-bit values. The SW, SH, and SB instructions store 32-bit, 16-bit, and 8-bit values from the low bits of register rs2 to memory."
+        },
+        {
+          "parent_id": "picorv32_scripts_romload_testbench_6",
+          "section_title": "always @(posedge clk) begin",
+          "rrf_score": 0.030077,
+          "child_matched": "```verilog\nalways @(posedge clk) begin\n mem_ready <= 0;\n if (mem_valid && !mem_ready) begin\n mem_ready <= 1;\n mem_rdata <= 'bx;\n case (1)\n mem_addr < MEM_SIZE: begin\n`ifdef MEM8BIT\n if (|mem_wstrb) begin\n if (mem_wstrb[0]) memory[mem_addr + 0] <= mem_wdata[ 7: 0];\n if (mem_wstrb[1]) memory[mem_addr + 1] <= mem_wdata[15: 8];\n if (mem_wstrb[2]) memory[mem_addr + 2] <= mem_wdata[23:16];\n if (mem_wstrb[3]) memory[mem_addr + 3] <= mem_wdata[31:24];\n end else begin\n mem_rdata <= {memory[mem_addr+3], memory[mem_addr+2], memory[mem_addr+1], memory[mem_addr]};\n end\n`else\n if ((|mem_wstrb) && (mem_addr >= `ROM_SIZE)) begin\n if (mem_wstrb[0]) memory[mem_addr >> 2][ 7: 0] <= mem_wdata[ 7: 0];\n if (mem_wstrb[1]) memory[mem_addr >> 2][15: 8] <= mem_wdata[15: 8];\n if (mem_wstrb[2]) memory[mem_addr >> 2][23:16] <= mem_wdata[23:16];\n if (mem_wstrb[3]) memory[mem_addr >> 2][31:24] <= mem_wdata[31:24];\n end else begin\n mem_rdata <= memory[mem_addr >> 2];\n end\n`endif\n end\n mem_addr == 32'h 1000_0000: begin\n $write(\"%c\", mem_wdata[7:0]);\n end\n endcase\n end\n if (mem_valid && mem_ready) begin\n`ifdef FIRMWARE_DEBUG_ADDR\n firmware_dbg(mem_addr);\n`endif\n if ((mem_wstrb == 4'h0) && (mem_rdata === 32'bx)) $display(\"READ FROM UNITIALIZED ADDR=%x\", mem_addr);\n`ifdef VERBOSE_MEM\n if (|mem_wstrb)\n $display(\"WR: ADDR=%x DATA=%x MASK=%b\", mem_addr, mem_wdata, mem_wstrb);\n else\n $display(\"RD: ADDR=%x DATA=%x%s\", mem_addr, mem_rdata, mem_instr ? \" INSN\" : \"\");\n`endif\n if (^mem_addr === 1'bx ||\n (mem_wstrb[0] && ^mem_wdata[ 7: 0] == 1'bx) ||\n (mem_wstrb[1] && ^mem_wdata[15: 8] == 1'bx) ||\n (mem_wstrb[2] && ^mem_wdata[23:16] == 1'bx) ||\n (mem_wstrb[3] && ^mem_wdata[31:24] == 1'bx)) begin\n $display(\"CRITICAL UNDEF MEM TRANSACTION\");\n $finish;\n end\n end\n end"
+        },
+        {
+          "parent_id": "3",
+          "section_title": "2.1.3. Immediate Encoding Variants",
+          "rrf_score": 0.016129,
+          "child_matched": "Sign extension is one of the most critical operations on immediates (particularly for XLEN>32), and in RISC-V the sign bit for all immediates is always held in bit 31 of the instruction to allow sign extension to proceed in parallel with instruction decoding. Although more complex implementations might have separate adders for branch and jump calculations and so would not benefit from keeping the location of immediate bits constant across types of instruction, we wanted to reduce the hardware cost of the simplest implementations. By rotating bits in the instruction encoding of B and J immediates instead of using dynamic hardware multiplexers to multiply the immediate by 2, we reduce instruction signal fanout and immediate multiplexer costs by around a factor of 2. The scrambled immediate encoding will add negligible time to static or ahead-of-time compilation. For dynamic generation of instructions, there is some small additional overhead, but the most common short forward branches have straightforward immediate encodings."
+        }
+      ],
+      "answer": "[LLM ERROR] Error code: 429 - {'error': {'message': 'Rate limit reached for model `openai/gpt-oss-20b` in organization `org_01kgakhd12fega7mnjby4my7s1` service tier `on_demand` on tokens per day (TPD): Limit 200000, Used 199120, Requested 4888. Please try again in 28m51.456s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}"
+    },
+    {
+      "question_id": 9,
+      "question": "How do you implement the Verilog logic to clear the LSB for JALR target addresses (`& ~1`), and simultaneously assert an `instruction_misaligned` exception signal if the resulting branch or jump target is not 32-bit aligned?",
+      "hyde_used": false,
+      "child_max_tokens": 120,
+      "prompt_tokens": -1,
+      "parents_retrieved": [
+        {
+          "parent_id": "9",
+          "section_title": "2.1.5.1. Unconditional Jumps",
+          "rrf_score": 0.032522,
+          "child_matched": "The JAL and JALR instructions will generate an instruction-address-misaligned exception if the target address is not aligned to a four-byte boundary."
+        },
+        {
+          "parent_id": "10",
+          "section_title": "2.1.5.2. Conditional Branches",
+          "rrf_score": 0.031746,
+          "child_matched": "The conditional branch instructions will generate an instruction-address-misaligned exception if the target address is not aligned to a four-byte boundary and the branch condition evaluates to true. If the branch condition evaluates to false, the instruction-address-misaligned exception will not be raised."
+        },
+        {
+          "parent_id": "2",
+          "section_title": "2.1.2. Base Instruction Formats",
+          "rrf_score": 0.030331,
+          "child_matched": "In the base RV32I ISA, there are four core instruction formats (R/I/S/U), as shown in Base instruction formats . All are a fixed 32 bits in length. The base ISA has IALIGN=32 , meaning that instructions must be aligned on a four-byte boundary in memory. An instruction-address-misaligned exception is generated on a taken branch or unconditional jump if the target address is not IALIGN-bit aligned. This exception is reported on the branch or jump instruction, not on the target instruction. No instruction-address-misaligned exception is generated for a conditional branch that is not taken."
+        }
+      ],
+      "answer": "[LLM ERROR] Error code: 429 - {'error': {'message': 'Rate limit reached for model `openai/gpt-oss-20b` in organization `org_01kgakhd12fega7mnjby4my7s1` service tier `on_demand` on tokens per day (TPD): Limit 200000, Used 199119, Requested 5300. Please try again in 31m49.008s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}"
+    },
+    {
+      "question_id": 10,
+      "question": "Explain the SystemVerilog implementation of the ALU's right-shift unit, specifically how to distinguish between SRL (logical) and SRA (arithmetic) utilizing the `$signed()` system task or manual sign-bit replication to avoid synthesis mismatches.",
+      "hyde_used": false,
+      "child_max_tokens": 120,
+      "prompt_tokens": -1,
+      "parents_retrieved": [
+        {
+          "parent_id": "6",
+          "section_title": "2.1.4.2. Integer Register-Register Instructions",
+          "rrf_score": 0.032787,
+          "child_matched": "SLL, SRL, and SRA perform logical left, logical right, and arithmetic right shifts on the value in register rs1 by the shift amount held in the lower 5 bits of register rs2 ."
+        },
+        {
+          "parent_id": "5",
+          "section_title": "2.1.4.1. Integer Register-Immediate Instructions",
+          "rrf_score": 0.031754,
+          "child_matched": "Shifts by a constant are encoded as a specialization of the I-type format. The operand to be shifted is in rs1 , and the shift amount is encoded in the lower 5 bits of the I-immediate field. The right-shift type is encoded in bit 30. SLLI is a logical left shift (zeros are shifted into the lower bits); SRLI is a logical right shift (zeros are shifted into the upper bits); and SRAI is an arithmetic right shift (the original sign bit is copied into the vacated upper bits)."
+        },
+        {
+          "parent_id": "10",
+          "section_title": "2.1.5.2. Conditional Branches",
+          "rrf_score": 0.029274,
+          "child_matched": "All branch instructions use the B-type instruction format. The 12-bit B-immediate encodes signed offsets in multiples of 2 bytes. The offset is sign-extended and added to the address of the branch instruction to give the target address. The conditional branch range is ±4 KiB."
+        }
+      ],
+      "answer": "[LLM ERROR] Error code: 429 - {'error': {'message': 'Rate limit reached for model `openai/gpt-oss-20b` in organization `org_01kgakhd12fega7mnjby4my7s1` service tier `on_demand` on tokens per day (TPD): Limit 200000, Used 199119, Requested 4379. Please try again in 25m11.136s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}"
+    }
+  ]
+}

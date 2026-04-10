@@ -67,7 +67,34 @@ MANIFEST_FILE     = f"{CHROMA_DIR}/manifest.json"  # tracks ingested slug hashes
 EVAL_QUESTIONS = [
     # 1. Decode & Immediate Generation
     "How do you structure the Verilog case statements in the Instruction Decoder to safely extract opcodes and route the correct sign-extended immediate logic for R, I, S, B, U, and J formats without inferring latches?",
-    ]
+    
+    # 2. Top-Level & Verilator Integration
+    "In a SystemVerilog top-level module for a single-cycle RV32I core, how should the clock, synchronous reset, and flat memory interface ports be defined to ensure clean compilation and compatibility with a Verilator C++ testbench?",
+    
+    # 3. Testbench / tohost interface
+    "Write the Verilog monitor logic required in the data memory interface to detect a store operation to the `tohost` address (0x80001000) and extract the pass/fail code for the simulation environment.",
+    
+    # 4. Byte-masking (Crucial for SB/SH/SW)
+    "How do you implement the combinational Verilog logic to generate the 4-bit `dmem_wmask` and align the `rs2` write data for SB, SH, and SW instructions based on the lower 2 bits of the ALU calculated address?",
+    
+    # 5. Register File x0 Invariant
+    "Describe the Verilog implementation of a dual-read, single-write RV32I Register File that natively enforces the x0 hardwired-to-zero invariant, specifically addressing the write-enable gating required to pass TEST_RR_ZERODEST.",
+    
+    # 6. Branch Logic & Next-PC
+    "How do you design the Verilog Next-PC (NPC) multiplexer and branch condition evaluation logic to correctly route either `PC+4` or `PC+imm` synchronously, ensuring no timing loops?",
+    
+    # 7. Datapath Routing
+    "Provide the Verilog structural mapping and control signal assignments needed to multiplex data from the Register File, through the ALU, and back to the Register File write-port during the execution of a standard R-type instruction.",
+    
+    # 8. Load Alignment & Extension
+    "Describe the Verilog multiplexing and bit-slicing logic required in the memory writeback stage to properly shift, sign-extend (LB, LH), or zero-extend (LBU, LHU) the 32-bit raw read data from the data memory.",
+    
+    # 9. JALR & Alignment Exceptions
+    "How do you implement the Verilog logic to clear the LSB for JALR target addresses (`& ~1`), and simultaneously assert an `instruction_misaligned` exception signal if the resulting branch or jump target is not 32-bit aligned?",
+    
+    # 10. ALU Shifter Logic
+    "Explain the SystemVerilog implementation of the ALU's right-shift unit, specifically how to distinguish between SRL (logical) and SRA (arithmetic) utilizing the `$signed()` system task or manual sign-bit replication to avoid synthesis mismatches."
+]
 
 
 # ── Child Splitters ───────────────────────────────────────────────────────────
@@ -451,7 +478,7 @@ def expand_to_parents(fused_children: list[dict], parent_store: dict,
 
 # Token budget constants
 MAX_INPUT_TOKENS  = 5500   # hard cap — stay well under Groq 8000 TPM limit
-MAX_OUTPUT_TOKENS = 2048
+MAX_OUTPUT_TOKENS = 4500
 
 def count_tokens(text: str) -> int:
     """Fast heuristic: 1 token ≈ 4 characters."""
