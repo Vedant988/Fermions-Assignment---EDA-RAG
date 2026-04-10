@@ -47,8 +47,8 @@ from groq import Groq
 
 load_dotenv()
 
-CHROMA_DIR      = "chroma_store_v3"
-COLLECTION_NAME = "rag_children_v3"
+CHROMA_DIR      = "chroma_store"
+COLLECTION_NAME = "rag_children"
 EMBED_MODEL     = "all-MiniLM-L6-v2"
 LLM_MODEL       = "openai/gpt-oss-20b"
 DATA_DIR        = "scraped data"   # ← drop a new *_chunks.json here and it auto-ingests
@@ -58,27 +58,16 @@ TOP_K_CHILDREN    = 12
 TOP_K_PARENTS     = 3
 RRF_K             = 60
 BM25_FETCH        = 15
-USE_HYDE          = "--no-hyde" not in sys.argv
+USE_HYDE = ("--no-hyde" not in sys.argv) if __name__ == "__main__" else False
 RESULTS_DIR       = "results"
 MANIFEST_FILE     = f"{CHROMA_DIR}/manifest.json"  # tracks ingested slug hashes
 
 # ── Test Questions ─────────────────────────────────────────────────────────────
 
 EVAL_QUESTIONS = [
-    "What is the exact bit encoding of the BEQ instruction in RV32I?",
-    "How does the JALR instruction compute its target address?",
-    "What is the difference between SRL and SRA in RV32I?",
-    "How does AUIPC use the program counter?",
-    "What happens when you write to register x0 in RV32I?",
-    "What sign extension does LH perform on a 16-bit value?",       # was failing
-    "What is the byte mask for an SB instruction?",                  # was failing
-    "How does the riscv-tests suite signal PASS or FAIL to the testbench?",
-    "What RTL invariant does TEST_RR_ZERODEST enforce?",
-    "What does TEST_BR2_OP_NOTTAKEN verify about branch logic?",
-    "What is the tohost memory address the Verilog testbench must poll?",
-    "What modules are needed to implement a single-cycle RV32I processor?",
-    "What are the corner cases for the ALU in an RV32I implementation?",
-]
+    # 1. Decode & Immediate Generation
+    "How do you structure the Verilog case statements in the Instruction Decoder to safely extract opcodes and route the correct sign-extended immediate logic for R, I, S, B, U, and J formats without inferring latches?",
+    ]
 
 
 # ── Child Splitters ───────────────────────────────────────────────────────────
@@ -460,36 +449,130 @@ def expand_to_parents(fused_children: list[dict], parent_store: dict,
     return parents_for_llm
 
 
-# ── LLM Answer ────────────────────────────────────────────────────────────────
+# Token budget constants
+MAX_INPUT_TOKENS  = 5500   # hard cap — stay well under Groq 8000 TPM limit
+MAX_OUTPUT_TOKENS = 2048
 
-def ask_llm(groq_client: Groq, question: str, parents: list[dict]) -> str:
-    context_block = "\n\n---\n\n".join(
-        f"[Source: {p['section_title']} | child_match: \"{p['child_matched'][:80]}...\"]\n\n{p['full_text']}"
-        for p in parents
+def count_tokens(text: str) -> int:
+    """Fast heuristic: 1 token ≈ 4 characters."""
+    return max(1, len(text) // 4)
+
+
+def build_prompt(question: str, parents: list[dict]) -> tuple[list[dict], int]:
+    """
+    Build the messages list, hard-truncating each parent's full_text so the
+    total estimated input token count stays under MAX_INPUT_TOKENS.
+    Returns (messages, estimated_prompt_token_count).
+    """
+    SYSTEM = (
+        "You are an expert RISC-V RTL design assistant. "
+        "Answer using ONLY the provided context. Be precise and technical. "
+        "Cite register names, field positions, and hex values when present. "
+        "If the context lacks sufficient information, state what is missing."
     )
+    # Fixed overhead: system + question + formatting separators
+    fixed_tokens = count_tokens(SYSTEM) + count_tokens(question) + 60
+    budget = MAX_INPUT_TOKENS - fixed_tokens
+
+    # Distribute budget equally across parents (chars = tokens * 4)
+    per_parent_chars = max(200, (budget // max(len(parents), 1)) * 4)
+
+    context_parts = []
+    for p in parents:
+        header = f"[Source: {p['section_title']} | child_match: \"{p['child_matched'][:80]}...\"]"
+        text   = p["full_text"][:per_parent_chars]
+        context_parts.append(f"{header}\n\n{text}")
+
+    context_block = "\n\n---\n\n".join(context_parts)
+    user_content  = f"CONTEXT:\n{context_block}\n\nQUESTION: {question}"
+
     messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are an expert RISC-V RTL design assistant. "
-                "Answer using ONLY the provided context. Be precise and technical. "
-                "Cite register names, field positions, and hex values when present. "
-                "If the context lacks sufficient information, state what is missing."
-            )
-        },
-        {
-            "role": "user",
-            "content": f"CONTEXT:\n{context_block}\n\nQUESTION: {question}"
-        }
+        {"role": "system", "content": SYSTEM},
+        {"role": "user",   "content": user_content},
     ]
+    total_tokens = count_tokens(SYSTEM) + count_tokens(user_content)
+    return messages, total_tokens
+
+
+def ask_llm(groq_client: Groq, question: str, parents: list[dict],
+            rate_limiter=None) -> tuple[str, int]:
+    messages, prompt_tokens = build_prompt(question, parents)
+    total_request_tokens = prompt_tokens + MAX_OUTPUT_TOKENS
+
+    # Wait for rate-limit headroom before calling
+    if rate_limiter is not None:
+        rate_limiter.wait(total_request_tokens)
+
     resp = groq_client.chat.completions.create(
         model=LLM_MODEL,
         messages=messages,
         temperature=0.1,
-        max_tokens=1024,
+        max_tokens=MAX_OUTPUT_TOKENS,
         stream=False,
     )
-    return resp.choices[0].message.content
+
+    if rate_limiter is not None:
+        rate_limiter.record(total_request_tokens)
+
+    content = resp.choices[0].message.content
+    if not content:
+        return "[LLM ERROR] API returned empty content — input may have been filtered or exceeded limit silently.", prompt_tokens
+    return content, prompt_tokens
+
+
+# ── Rate Limiter ───────────────────────────────────────────────────────────────
+
+class RateLimiter:
+    """
+    Sliding-window rate limiter that enforces:
+      - max_tpm  : max tokens per 60-second window
+      - max_rpm  : max requests per 60-second window
+    Automatically sleeps until there is enough headroom before each request.
+    """
+    def __init__(self, max_tpm: int = 8000, max_rpm: int = 30):
+        self.max_tpm = max_tpm
+        self.max_rpm = max_rpm
+        self._log: list[tuple[float, int]] = []  # (timestamp, tokens_used)
+
+    def _purge(self):
+        """Remove entries older than 60 seconds."""
+        cutoff = time.time() - 60.0
+        self._log = [(t, tok) for t, tok in self._log if t > cutoff]
+
+    def _used_tokens(self) -> int:
+        self._purge()
+        return sum(tok for _, tok in self._log)
+
+    def _used_requests(self) -> int:
+        self._purge()
+        return len(self._log)
+
+    def wait(self, tokens_needed: int):
+        """Block until this request can safely be made within rate limits."""
+        while True:
+            self._purge()
+            tpm_ok = (self._used_tokens() + tokens_needed) <= self.max_tpm
+            rpm_ok = self._used_requests() < self.max_rpm
+
+            if tpm_ok and rpm_ok:
+                break
+
+            # Calculate how long until the oldest entry expires
+            if self._log:
+                oldest_ts = self._log[0][0]
+                sleep_for = max(0.5, (oldest_ts + 61.0) - time.time())
+            else:
+                sleep_for = 5.0
+
+            used_tok = self._used_tokens()
+            used_req = self._used_requests()
+            print(f"\n  ⏳ Rate limit: {used_tok}/{self.max_tpm} tok used, "
+                  f"{used_req}/{self.max_rpm} req — sleeping {sleep_for:.1f}s...")
+            time.sleep(sleep_for)
+
+    def record(self, tokens_used: int):
+        """Record a completed API call."""
+        self._log.append((time.time(), tokens_used))
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -509,6 +592,10 @@ def main():
     print("\n[1/5] Building parent store + child chunks...")
     parent_store, children, new_children = build_hierarchy()
 
+    # Rate limiter (8K TPM, 30 RPM  — from Groq docs for openai/gpt-oss-20b)
+    limiter = RateLimiter(max_tpm=8000, max_rpm=30)
+    print(f"  Rate limiter: {limiter.max_tpm} TPM / {limiter.max_rpm} RPM")
+
     # ── 2. BM25 on children ───────────────────────────────────────────────────
     print("\n[2/5] Building BM25 index over children...")
     bm25, tokenize_fn = build_bm25_children(children)
@@ -522,23 +609,27 @@ def main():
     print(f"\n[4/5] Incrementally embedding into ChromaDB...")
     collection = build_chroma_children(new_children, embedder)
 
-    # ── 4. Evaluate ───────────────────────────────────────────────────────────
+    # ── 4. Evaluate ─────────────────────────────────────────────────────────────
     print(f"\n[5/5] Running {len(EVAL_QUESTIONS)} questions...")
     print(f"  Config: child_max_tokens={CHILD_MAX_TOKENS}, "
           f"top_k_children={TOP_K_CHILDREN}, top_k_parents={TOP_K_PARENTS}, "
           f"hyde={'ON' if USE_HYDE else 'OFF'}\n")
+
+    # 60-second warm-up: ensures the TPM window is fully clear before Q1
+    print("  ⏳ 60s safety warm-up (clearing TPM window before Q1)...", flush=True)
+    time.sleep(60)
+    print("  ✓ Ready.\n")
     results = []
 
     for i, question in enumerate(EVAL_QUESTIONS):
         print(f"Q{i+1:02d}. {question}")
         print("-" * 62)
 
-        # HyDE
+        # HyDE (also counts toward rate limit)
         if USE_HYDE:
             print("  → HyDE...", end="", flush=True)
             embed_q = expand_query_hyde(groq_client, question)
             print(" ✓")
-            time.sleep(0.4)
         else:
             embed_q = question
 
@@ -558,23 +649,34 @@ def main():
         # Print telemetry
         print(f"  Parents fetched ({len(parents)}) via child expansion:")
         for p in parents:
-            print(f"    [rrf={p['rrf_score']:.5f}] {p['section_title'][:55]}")
+            ptok = count_tokens(p['full_text'])
+            print(f"    [rrf={p['rrf_score']:.5f}] ({ptok} tok) {p['section_title'][:50]}")
             print(f"           child: \"{p['child_matched'][:70]}\"")
 
         # LLM answer
         try:
-            answer = ask_llm(groq_client, question, parents)
+            answer, prompt_tokens = ask_llm(groq_client, question, parents,
+                                            rate_limiter=limiter)
         except Exception as e:
             answer = f"[LLM ERROR] {e}"
+            prompt_tokens = -1
 
+        print(f"\n  ┌─ Token Budget ──────────────────────────────────────────")
+        print(f"  │  Input (prompt): {prompt_tokens:>5} tok   Max output: {MAX_OUTPUT_TOKENS} tok   Hard cap: {MAX_INPUT_TOKENS} tok")
+        bar_pct = min(prompt_tokens / MAX_INPUT_TOKENS, 1.0)
+        bar_len = int(bar_pct * 40)
+        bar = '█' * bar_len + '░' * (40 - bar_len)
+        flag = " ⚠️  OVER BUDGET" if prompt_tokens > MAX_INPUT_TOKENS else ""
+        print(f"  └  [{bar}] {bar_pct*100:.1f}%{flag}")
         print(f"\n  Answer:\n  {answer[:350].replace(chr(10), chr(10)+'  ')}...")
         print()
 
         results.append({
-            "question_id": i + 1,
-            "question":    question,
-            "hyde_used":   USE_HYDE,
+            "question_id":      i + 1,
+            "question":         question,
+            "hyde_used":        USE_HYDE,
             "child_max_tokens": CHILD_MAX_TOKENS,
+            "prompt_tokens":    prompt_tokens,
             "parents_retrieved": [
                 {
                     "parent_id":     p["parent_id"],
@@ -587,25 +689,24 @@ def main():
             "answer": answer,
         })
 
-        time.sleep(10.0)
-
     # ── 5. Save ───────────────────────────────────────────────────────────────
     out_dir = Path(RESULTS_DIR)
     out_dir.mkdir(exist_ok=True)
 
-    # Find the next incremental ID
-    existing = list(out_dir.glob("rag_test_results_v3_*.json"))
+    # Find the next incremental version number across ALL result files
+    existing = list(out_dir.glob("rag_test_results_v*.json"))
     max_id = 0
     for f_path in existing:
-        m = re.search(r'_v3_(\d+)\.json$', f_path.name)
+        m = re.search(r'_v(\d+)\.json$', f_path.name)
         if m:
             max_id = max(max_id, int(m.group(1)))
     next_id = max_id + 1
-    output_file = out_dir / f"rag_test_results_v3_{next_id}.json"
+    output_file = out_dir / f"rag_test_results_v{next_id}.json"
 
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump({
-            "version":           "v3-parent-child",
+            "version":           f"v{next_id}-parent-child",
+            "run_timestamp":     time.strftime("%Y-%m-%dT%H:%M:%S"),
             "model":             LLM_MODEL,
             "embed_model":       EMBED_MODEL,
             "child_max_tokens":  CHILD_MAX_TOKENS,
@@ -613,6 +714,8 @@ def main():
             "top_k_parents":     TOP_K_PARENTS,
             "hyde":              USE_HYDE,
             "rrf_k":             RRF_K,
+            "max_input_tokens":  MAX_INPUT_TOKENS,
+            "num_questions":     len(EVAL_QUESTIONS),
             "total_parents":     len(parent_store),
             "total_children":    len(children),
             "results":           results,

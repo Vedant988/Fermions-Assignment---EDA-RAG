@@ -1,0 +1,294 @@
+{
+  "version": "v3-parent-child",
+  "model": "openai/gpt-oss-20b",
+  "embed_model": "all-MiniLM-L6-v2",
+  "child_max_tokens": 120,
+  "top_k_children": 12,
+  "top_k_parents": 3,
+  "hyde": false,
+  "rrf_k": 60,
+  "total_parents": 614,
+  "total_children": 2910,
+  "results": [
+    {
+      "question_id": 1,
+      "question": "How do you structure the Verilog case statements in the Instruction Decoder to safely extract opcodes and route the correct sign-extended immediate logic for R, I, S, B, U, and J formats without inferring latches?",
+      "hyde_used": false,
+      "child_max_tokens": 120,
+      "prompt_tokens": 3908,
+      "parents_retrieved": [
+        {
+          "parent_id": "rv32ui_lhu",
+          "section_title": "rv32ui Test: LHU",
+          "rrf_score": 0.116919,
+          "child_matched": "- `TEST_LD_OP`: Load instruction correctness: compute effective address rs1+offset, load from memory. Tests: address adder, byte/halfword/word sign/zero extension logic."
+        },
+        {
+          "parent_id": "3",
+          "section_title": "2.1.3. Immediate Encoding Variants",
+          "rrf_score": 0.048652,
+          "child_matched": "There are a further two variants of the instruction formats (B/J) based on the handling of immediates, as shown in Base instruction formats immediate variants. ."
+        },
+        {
+          "parent_id": "picorv32_picorv32_25",
+          "section_title": "always @(posedge clk) begin",
+          "rrf_score": 0.031498,
+          "child_matched": "case (mem_rdata_latched[1:0])\n 2'b00: begin // Quadrant 0\n case (mem_rdata_latched[15:13])\n 3'b000: begin // C.ADDI4SPN\n is_alu_reg_imm <= |mem_rdata_latched[12:5];\n decoded_rs1 <= 2;\n decoded_rd <= 8 + mem_rdata_latched[4:2];\n end\n 3'b010: begin // C.LW\n is_lb_lh_lw_lbu_lhu <= 1;\n decoded_rs1 <= 8 + mem_rdata_latched[9:7];\n decoded_rd <= 8 + mem_rdata_latched[4:2];\n end\n 3'b110: begin // C.SW\n is_sb_sh_sw <= 1;\n decoded_rs1 <= 8 + mem_rdata_latched[9:7];\n decoded_rs2 <= 8 + mem_rdata_latched[4:2];\n end\n endcase\n end\n 2'b01: begin // Quadrant 1\n case (mem_rdata_latched[15:13])\n 3'b000: begin // C.NOP / C.ADDI\n is_alu_reg_imm <= 1;\n decoded_rd <= mem_rdata_latched[11:7];\n decoded_rs1 <= mem_rdata_latched[11:7];\n end\n 3'b001: begin // C.JAL\n instr_jal <= 1;\n decoded_rd <= 1;\n end\n 3'b 010: begin // C.LI\n is_alu_reg_imm <= 1;\n decoded_rd <= mem_rdata_latched[11:7];\n decoded_rs1 <= 0;\n end\n 3'b 011: begin\n if (mem_rdata_latched[12] || mem_rdata_latched[6:2]) begin\n if (mem_rdata_latched[11:7] == 2) begin // C.ADDI16SP\n is_alu_reg_imm <= 1;\n decoded_rd <= mem_rdata_latched[11:7];\n decoded_rs1 <= mem_rdata_latched[11:7];\n end else begin // C.LUI\n instr_lui <= 1;\n decoded_rd <= mem_rdata_latched[11:7];\n decoded_rs1 <= 0;\n end\n end\n end\n 3'b100: begin\n if (!mem_rdata_latched[11] && !mem_rdata_latched[12]) begin // C.SRLI, C.SRAI\n is_alu_reg_imm <= 1;\n decoded_rd <= 8 + mem_rdata_latched[9:7];\n decoded_rs1 <= 8 + mem_rdata_latched[9:7];\n decoded_rs2 <= {mem_rdata_latched[12], mem_rdata_latched[6:2]};\n end\n if (mem_rdata_latched[11:10] == 2'b10) begin // C.ANDI\n is_alu_reg_imm <= 1;\n decoded_rd <= 8 + mem_rdata_latched[9:7];\n decoded_rs1 <= 8 + mem_rdata_latched[9:7];\n end\n if (mem_rdata_latched[12:10] == 3'b011) begin // C.SUB, C.XOR, C.OR, C.AND\n is_alu_reg_reg <= 1;\n decoded_rd <= 8 + mem_rdata_latched[9:7];\n decoded_rs1 <= 8 + mem_rdata_latched[9:7];\n decoded_rs2 <= 8 + mem_rdata_latched[4:2];\n end\n end\n 3'b101: begin // C.J\n instr_jal <= 1;\n end\n 3'b110: begin // C.BEQZ\n is_beq_bne_blt_bge_bltu_bgeu <= 1;\n decoded_rs1 <= 8 + mem_rdata_latched[9:7];\n decoded_rs2 <= 0;\n end\n 3'b111: begin // C.BNEZ\n is_beq_bne_blt_bge_bltu_bgeu <= 1;\n decoded_rs1 <= 8 + mem_rdata_latched[9:7];\n decoded_rs2 <= 0;\n end\n endcase\n end\n 2'b10: begin // Quadrant 2\n case (mem_rdata_latched[15:13])\n 3'b000: begin // C.SLLI\n if (!mem_rdata_latched[12]) begin\n is_alu_reg_imm <= 1;\n decoded_rd <= mem_rdata_latched[11:7];\n decoded_rs1 <= mem_rdata_latched[11:7];\n decoded_rs2 <= {mem_rdata_latched[12], mem_rdata_latched[6:2]};\n end\n end\n 3'b010: begin // C.LWSP\n if (mem_rdata_latched[11:7]) begin\n is_lb_lh_lw_lbu_lhu <= 1;\n decoded_rd <= mem_rdata_latched[11:7];\n decoded_rs1 <= 2;\n end\n end\n 3'b100: begin\n if (mem_rdata_latched[12] == 0 && mem_rdata_latched[11:7] != 0 && mem_rdata_latched[6:2] == 0) begin // C.JR\n instr_jalr <= 1;\n decoded_rd <= 0;\n decoded_rs1 <= mem_rdata_latched[11:7];\n end\n if (mem_rdata_latched[12] == 0 && mem_rdata_latched[6:2] != 0) begin // C.MV\n is_alu_reg_reg <= 1;\n decoded_rd <= mem_rdata_latched[11:7];\n decoded_rs1 <= 0;\n decoded_rs2 <= mem_rdata_latched[6:2];\n end\n if (mem_rdata_latched[12] != 0 && mem_rdata_latched[11:7] != 0 && mem_rdata_latched[6:2] == 0) begin // C.JALR\n instr_jalr <= 1;\n decoded_rd <= 1;\n decoded_rs1 <= mem_rdata_latched[11:7];\n end\n if (mem_rdata_latched[12] != 0 && mem_rdata_latched[6:2] != 0) begin // C.ADD\n is_alu_reg_reg <= 1;\n decoded_rd <= mem_rdata_latched[11:7];\n decoded_rs1 <= mem_rdata_latched[11:7];\n decoded_rs2 <= mem_rdata_latched[6:2];\n end\n end\n 3'b110: begin // C.SWSP\n is_sb_sh_sw <= 1;\n decoded_rs1 <= 2;\n decoded_rs2 <= mem_rdata_latched[6:2];\n end\n endcase\n end\n endcase\n end\n end"
+        }
+      ],
+      "answer": "**Key idea**\n\nAll decoding must be *combinational* – i.e. in an `always @(*)` block – and every output must receive a value in *every* execution path.  \nThe usual pattern is:\n\n```verilog\n// 1.  Default all outputs\nalways @(*) begin\n    // opcode‑level flags\n    is_lui_auipc_jal      = 0;\n    is_lui_auipc_jal_jalr_addi_add_sub = 0;\n    is_slti_blt_slt       = 0;\n    is_sltiu_bltu_sltu    = 0;\n    is_lbu_lhu_lw         = 0;\n    is_compare            = 0;\n    is_beq_bne_blt_bge_bltu_bgeu = 0;\n    is_lb_lh_lw_lbu_lhu   = 0;\n    is_sb_sh_sw           = 0;\n    is_alu_reg_imm        = 0;\n    is_alu_reg_reg        = 0;\n    // immediate registers\n    decoded_imm_i         = 0;\n    decoded_imm_s         = 0;\n    decoded_imm_b         = 0;\n    decoded_imm_u         = 0;\n    decoded_imm_j         = 0;\n    // register fields\n    decoded_rd            = 0;\n    decoded_rs1           = 0;\n    decoded_rs2           = 0;\n    // compressed‑specific\n    compressed_instr      = 0;\n```\n\n**2.  Decode the 7‑bit opcode**\n\n```verilog\n    case (mem_rdata_latched[6:0])\n        7'b0110111: begin          // LUI\n            is_lui_auipc_jal = 1;\n            decoded_rd       = mem_rdata_latched[11:7];\n            decoded_imm_u    = {mem_rdata_latched[31:12], 12'b0};\n        end\n        7'b0010111: begin          // AUIPC\n            is_lui_auipc_jal = 1;\n            decoded_rd       = mem_rdata_latched[11:7];\n            decoded_imm_u    = {mem_rdata_latched[31:12], 12'b0};\n        end\n        7'b1101111: begin          // JAL\n            is_lui_auipc_jal = 1;\n            decoded_rd       = mem_rdata_latched[11:7];\n            decoded_imm_j    = $signed({mem_rdata_latched[31], mem_rdata_latched[19:12],\n                                        mem_rdata_latched[20], mem_rdata_latched[30:21], 1'b0});\n        end\n        7'b1100111: begin          // JALR\n            is_lui_auipc_jal_jalr_addi_add_sub = 1;\n            decoded_rd       = mem_rdata_latched[11:7];\n            decoded_rs1      = mem_rdata_latched[19:15];\n            decoded_imm_i    = $signed(mem_rdata_latched[31:20]);\n        end\n        7'b0010011: begin          // I‑type ALU\n            is_lui_auipc_jal_jalr_addi_add_sub = 1;\n            decoded_rd       = mem_rdata_latched[11:7];\n            decoded_rs1      = mem_rdata_latched[19:15];\n            decoded_imm_i    = $signed(mem_rdata_latched[31:20]);\n            is_alu_reg_imm   = 1;\n        end\n        7'b0110011: begin          // R‑type ALU\n            is_lui_auipc_jal_jalr_addi_add_sub = 1;\n            decoded_rd       = mem_rdata_latched[11:7];\n            decoded_rs1      = mem_rdata_latched[19:15];\n            decoded_rs2      = mem_rdata_latched[24:20];\n            is_alu_reg_reg   = 1;\n        end\n        7'b0000011: begin          // Load\n            is_lbu_lhu_lw = 1;\n            decoded_rd    = mem_rdata_latched[11:7];\n            decoded_rs1   = mem_rdata_latched[19:15];\n            decoded_imm_i = $signed(mem_rdata_latched[31:20]);   // LUI‑style sign‑extend\n            case (mem_rdata_latched[14:12])   // funct3\n                3'b000: is_lb_lh_lw_lbu_lhu = 1;   // LB\n                3'b001: is_lb_lh_lw_lbu_lhu = 1;   // LH\n                3'b010: is_lb_lh_lw_lbu_lhu = 1;   // LW\n                3'b100: is_lb_lh_lw_lbu_lhu = 1;   // LBU\n                3'b101: is_lb_lh_lw_lbu_lhu = 1;   // LHU\n            endcase\n        end\n        7'b0100011: begin          // Store\n            is_sb_sh_sw = 1;\n            decoded_rs1  = mem_rdata_latched[19:15];\n            decoded_rs2  = mem_rdata_latched[24:20];\n            decoded_imm_s = {mem_rdata_latched[31:25], mem_rdata_latched[11:7]};\n            decoded_imm_s = $signed(decoded_imm_s);\n        end\n        7'b1100011: begin          // Branch\n            is_beq_bne_blt_bge_bltu_bgeu = 1;\n            decoded_rs1 = mem_rdata_latched[19:15];\n            decoded_rs2 = mem_rdata_latched[24:20];\n            decoded_imm_b = $signed({mem_rdata_latched[31], mem_rdata_latched[7],\n                                     mem_rdata_latched[30:25], mem_rdata_latched[11:8], 1'b0});\n        end\n        default: begin\n            // All flags already zeroed above\n        end\n    endcase\n```\n\n**3.  Handle compressed instructions**\n\nThe compressed path is *inside* the same combinational block but guarded by the `if (COMPRESSED_ISA && mem_rdata_latched[1:0] != 2'b11)` test.  \nBecause the compressed decoder also assigns **all** outputs, it must start with the same default assignments as above (or use a separate `always @(*)` block that drives a *compressed‑only* set of signals and then muxes them into the main outputs).  The key is that every output gets a value in *every* branch – otherwise the synthesiser will infer a latch.\n\n```verilog\n    if (COMPRESSED_ISA && mem_rdata_latched[1:0] != 2'b11) begin\n        compressed_instr = 1;\n        // default all compressed outputs to zero\n        is_lui_auipc_jal = 0;  // etc.\n        // decode the"
+    },
+    {
+      "question_id": 2,
+      "question": "In a SystemVerilog top-level module for a single-cycle RV32I core, how should the clock, synchronous reset, and flat memory interface ports be defined to ensure clean compilation and compatibility with a Verilator C++ testbench?",
+      "hyde_used": false,
+      "child_max_tokens": 120,
+      "prompt_tokens": 717,
+      "parents_retrieved": [
+        {
+          "parent_id": "picorv32_picosoc_icebreaker_3",
+          "section_title": "always @(posedge clk) begin",
+          "rrf_score": 0.06402,
+          "child_matched": "```verilog\nalways @(posedge clk) begin\n reset_cnt <= reset_cnt + !resetn;\n end"
+        },
+        {
+          "parent_id": "picorv32_README_8",
+          "section_title": "scripts/",
+          "rrf_score": 0.030536,
+          "child_matched": "The following Verilog module parameters can be used to configure the PicoRV32\ncore."
+        },
+        {
+          "parent_id": "picorv32_README_9",
+          "section_title": "ENABLE_COUNTERS (default = 1)",
+          "rrf_score": 0.029631,
+          "child_matched": "*Note: Strictly speaking the `RDCYCLE[H]`, `RDTIME[H]`, and `RDINSTRET[H]`\ninstructions are not optional for an RV32I core. But chances are they are not\ngoing to be missed after the application code has been debugged and profiled.\nThis instructions are optional for an RV32E core.*"
+        }
+      ],
+      "answer": "**Top‑level port list (SystemVerilog)**  \n\n```systemverilog\nmodule rv32i_top\n  #(parameter ENABLE_COUNTERS = 1)   // optional, not required for the port list\n  (\n    // --- Clock & synchronous reset ------------------------------------\n    input  logic          clk,          // rising‑edge clock\n    input  logic          resetn,       // active‑low synchronous reset\n\n    // --- Flat memory interface -----------------------------------------\n    input  logic          iomem_valid,  // request from the core\n    output logic          iomem_ready,  // acknowledge from the memory\n    input  logic [3:0]    iomem_wstrb,  // byte‑write enable\n    input  logic [31:0]   iomem_addr,   // address\n    input  logic [31:0]   iomem_wdata,  // data to write\n    output logic [31:0]   iomem_rdata   // data read back\n  );\n```\n\n### Why this definition works\n\n| Signal | Type | Why it is declared this way |\n|--------|------|-----------------------------|\n| `clk` | `input logic` | Verilator expects a 1‑bit input for the clock. Using `logic` (instead of `reg`) keeps the code synthesizable and Verilator‑friendly. |\n| `resetn` | `input logic` | Active‑low synchronous reset. The core’s reset logic should be written as `always_ff @(posedge clk) begin if (!resetn) … else …`. This matches the example in the context (`reset_cnt <= reset_cnt + !resetn;`). |\n| `iomem_valid` | `input logic` | Core‑side request. |\n| `iomem_ready` | `output logic` | Memory‑side acknowledge. |\n| `iomem_wstrb` | `input logic [3:0]` | Byte‑write enable (4 bits for 32‑bit word). |\n| `iomem_addr` | `input logic [31:0]` | 32‑bit address bus. |\n| `iomem_wdata` | `input logic [31:0]` | 32‑bit write data. |\n| `iomem_rdata` | `output logic [31:0]` | 32‑bit read data. |\n\n*All signals are declared as `logic` (the SystemVerilog equivalent of a 1‑bit vector).  \nNo `reg` or `wire` keywords are needed; Verilator treats `logic` as a 1‑bit register or wire depending on the context.*\n\n### Minimal implementation example\n\n```systemverilog\nmodule rv32i_top\n  (\n    input  logic          clk,\n    input  logic          resetn,\n    input  logic          iomem_valid,\n    output logic          iomem_ready,\n    input  logic [3:0]    iomem_wstrb,\n    input  logic [31:0]   iomem_addr,\n    input  logic [31:0]   iomem_wdata,\n    output logic [31:0]   iomem_rdata\n  );\n\n  // Example of a synchronous reset (as in the context)\n  logic [31:0] reset_cnt;\n  always_ff @(posedge clk) begin\n    if (!resetn)\n      reset_cnt <= 0;\n    else\n      reset_cnt"
+    },
+    {
+      "question_id": 3,
+      "question": "Write the Verilog monitor logic required in the data memory interface to detect a store operation to the `tohost` address (0x80001000) and extract the pass/fail code for the simulation environment.",
+      "hyde_used": false,
+      "child_max_tokens": 120,
+      "prompt_tokens": -1,
+      "parents_retrieved": [
+        {
+          "parent_id": "picorv32_testbench_wb_12",
+          "section_title": "module wb_ram #(",
+          "rrf_score": 0.032522,
+          "child_matched": "```verilog\nmodule wb_ram #(\n parameter depth = 256,\n parameter memfile = \"\",\n parameter VERBOSE = 0\n) (\n input wb_clk_i,\n input wb_rst_i,"
+        },
+        {
+          "parent_id": "picorv32_testbench_15",
+          "section_title": "initial begin",
+          "rrf_score": 0.031498,
+          "child_matched": "```verilog\ninitial begin\n mem_axi_awready = 0;\n mem_axi_wready = 0;\n mem_axi_bvalid = 0;\n mem_axi_arready = 0;\n mem_axi_rvalid = 0;\n tests_passed = 0;\n end"
+        },
+        {
+          "parent_id": "picorv32_scripts_smtbmc_mulcmp_2",
+          "section_title": "always @(posedge clk) begin",
+          "rrf_score": 0.030536,
+          "child_matched": "```verilog\nalways @(posedge clk) begin\n if (resetn) begin\n if (pcpi_ready_0 && pcpi_ready_1) begin\n assert(pcpi_wr_0 == pcpi_wr_1);\n assert(pcpi_rd_0 == pcpi_rd_1);\n end"
+        }
+      ],
+      "answer": "[LLM ERROR] Error code: 429 - {'error': {'message': 'Rate limit reached for model `openai/gpt-oss-20b` in organization `org_01kgakhd12fega7mnjby4my7s1` service tier `on_demand` on tokens per day (TPD): Limit 200000, Used 197260, Requested 2947. Please try again in 1m29.424s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}"
+    },
+    {
+      "question_id": 4,
+      "question": "How do you implement the combinational Verilog logic to generate the 4-bit `dmem_wmask` and align the `rs2` write data for SB, SH, and SW instructions based on the lower 2 bits of the ALU calculated address?",
+      "hyde_used": false,
+      "child_max_tokens": 120,
+      "prompt_tokens": -1,
+      "parents_retrieved": [
+        {
+          "parent_id": "picorv32_picosoc_icebreaker_4",
+          "section_title": "always @(posedge clk) begin",
+          "rrf_score": 0.05841,
+          "child_matched": "```verilog\nalways @(posedge clk) begin\n if (!resetn) begin\n gpio <= 0;\n end else begin\n iomem_ready <= 0;\n if (iomem_valid && !iomem_ready && iomem_addr[31:24] == 8'h 03) begin\n iomem_ready <= 1;\n iomem_rdata <= gpio;\n if (iomem_wstrb[0]) gpio[ 7: 0] <= iomem_wdata[ 7: 0];\n if (iomem_wstrb[1]) gpio[15: 8] <= iomem_wdata[15: 8];\n if (iomem_wstrb[2]) gpio[23:16] <= iomem_wdata[23:16];\n if (iomem_wstrb[3]) gpio[31:24] <= iomem_wdata[31:24];\n end\n end\n end"
+        },
+        {
+          "parent_id": "picorv32_testbench_wb_15",
+          "section_title": "always @(posedge wb_clk_i) begin",
+          "rrf_score": 0.032522,
+          "child_matched": "```verilog\nalways @(posedge wb_clk_i) begin\n adr_r <= wb_adr_i;\n // Ack generation\n wb_ack_o <= valid & !wb_ack_o;\n if (wb_rst_i)\n begin\n adr_r <= {32{1'b0}};\n wb_ack_o <= 1'b0;\n end\n end"
+        },
+        {
+          "parent_id": "picorv32_testbench_wb_17",
+          "section_title": "always @(posedge wb_clk_i) begin",
+          "rrf_score": 0.031498,
+          "child_matched": "```verilog\nalways @(posedge wb_clk_i) begin\n if (waddr2 < 128 * 1024 / 4) begin\n if (we[0])\n mem[waddr2][7:0] <= wb_dat_i[7:0];"
+        }
+      ],
+      "answer": "[LLM ERROR] Error code: 429 - {'error': {'message': 'Rate limit reached for model `openai/gpt-oss-20b` in organization `org_01kgakhd12fega7mnjby4my7s1` service tier `on_demand` on tokens per day (TPD): Limit 200000, Used 197260, Requested 3549. Please try again in 5m49.488s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}"
+    },
+    {
+      "question_id": 5,
+      "question": "Describe the Verilog implementation of a dual-read, single-write RV32I Register File that natively enforces the x0 hardwired-to-zero invariant, specifically addressing the write-enable gating required to pass TEST_RR_ZERODEST.",
+      "hyde_used": false,
+      "child_max_tokens": 120,
+      "prompt_tokens": -1,
+      "parents_retrieved": [
+        {
+          "parent_id": "1",
+          "section_title": "2.1.1. Programmers' Model for Base Integer ISA",
+          "rrf_score": 0.046221,
+          "child_matched": "RISC-V base unprivileged integer register state. shows the unprivileged state for the base integer ISA. For RV32I, the 32 x registers are each 32 bits wide, i.e., XLEN=32 . Register x0 is hardwired with all bits equal to 0. General purpose registers x1-x31 hold values that various instructions interpret as a collection of Boolean values, or as two’s complement signed binary integers or unsigned binary integers."
+        },
+        {
+          "parent_id": "picorv32_README_0",
+          "section_title": "Table of Contents",
+          "rrf_score": 0.031498,
+          "child_matched": "For even smaller size it is possible disable support for registers `x16`..`x31` as\nwell as `RDCYCLE[H]`, `RDTIME[H]`, and `RDINSTRET[H]` instructions, turning the\nprocessor into an RV32E core."
+        },
+        {
+          "parent_id": "6",
+          "section_title": "2.1.4.2. Integer Register-Register Instructions",
+          "rrf_score": 0.030536,
+          "child_matched": "RV32I defines several arithmetic R-type operations. All operations read the rs1 and rs2 registers as source operands and write the result into register rd . The funct7 and funct3 fields select the type of operation."
+        }
+      ],
+      "answer": "[LLM ERROR] Error code: 429 - {'error': {'message': 'Rate limit reached for model `openai/gpt-oss-20b` in organization `org_01kgakhd12fega7mnjby4my7s1` service tier `on_demand` on tokens per day (TPD): Limit 200000, Used 197259, Requested 4179. Please try again in 10m21.216s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}"
+    },
+    {
+      "question_id": 6,
+      "question": "How do you design the Verilog Next-PC (NPC) multiplexer and branch condition evaluation logic to correctly route either `PC+4` or `PC+imm` synchronously, ensuring no timing loops?",
+      "hyde_used": false,
+      "child_max_tokens": 120,
+      "prompt_tokens": -1,
+      "parents_retrieved": [
+        {
+          "parent_id": "rv32ui_bne",
+          "section_title": "rv32ui Test: BNE",
+          "rrf_score": 0.290422,
+          "child_matched": "- `TEST_BR2_OP_TAKEN`: Branch taken: condition is true, PC must jump to target. Tests: branch condition logic, PC update to PC+imm.\n- `TEST_BR2_OP_NOTTAKEN`: Branch not taken: condition is false, PC must fall through to PC+4. Tests: branch condition logic, sequential PC increment."
+        },
+        {
+          "parent_id": "10",
+          "section_title": "2.1.5.2. Conditional Branches",
+          "rrf_score": 0.014706,
+          "child_matched": "The conditional branch instructions will generate an instruction-address-misaligned exception if the target address is not aligned to a four-byte boundary and the branch condition evaluates to true. If the branch condition evaluates to false, the instruction-address-misaligned exception will not be raised."
+        },
+        {
+          "parent_id": "picorv32_README_43",
+          "section_title": "timer",
+          "rrf_score": 0.014493,
+          "child_matched": "Evaluation: Timing and Utilization on Xilinx 7-Series FPGAs\n-----------------------------------------------------------"
+        }
+      ],
+      "answer": "[LLM ERROR] Error code: 429 - {'error': {'message': 'Rate limit reached for model `openai/gpt-oss-20b` in organization `org_01kgakhd12fega7mnjby4my7s1` service tier `on_demand` on tokens per day (TPD): Limit 200000, Used 197118, Requested 6183. Please try again in 23m46.032s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}"
+    },
+    {
+      "question_id": 7,
+      "question": "Provide the Verilog structural mapping and control signal assignments needed to multiplex data from the Register File, through the ALU, and back to the Register File write-port during the execution of a standard R-type instruction.",
+      "hyde_used": false,
+      "child_max_tokens": 120,
+      "prompt_tokens": -1,
+      "parents_retrieved": [
+        {
+          "parent_id": "4",
+          "section_title": "2.1.4. Integer Computational Instructions",
+          "rrf_score": 0.032522,
+          "child_matched": "Most integer computational instructions operate on XLEN bits of values held in the integer register file. Integer computational instructions are either encoded as register-immediate operations using the I-type format or as register-register operations using the R-type format. The destination is register rd for both register-immediate and register-register instructions. No integer computational instructions cause arithmetic exceptions."
+        },
+        {
+          "parent_id": "6",
+          "section_title": "2.1.4.2. Integer Register-Register Instructions",
+          "rrf_score": 0.031498,
+          "child_matched": "RV32I defines several arithmetic R-type operations. All operations read the rs1 and rs2 registers as source operands and write the result into register rd . The funct7 and funct3 fields select the type of operation."
+        },
+        {
+          "parent_id": "picorv32_testbench_15",
+          "section_title": "initial begin",
+          "rrf_score": 0.030536,
+          "child_matched": "```verilog\ninitial begin\n mem_axi_awready = 0;\n mem_axi_wready = 0;\n mem_axi_bvalid = 0;\n mem_axi_arready = 0;\n mem_axi_rvalid = 0;\n tests_passed = 0;\n end"
+        }
+      ],
+      "answer": "[LLM ERROR] Error code: 429 - {'error': {'message': 'Rate limit reached for model `openai/gpt-oss-20b` in organization `org_01kgakhd12fega7mnjby4my7s1` service tier `on_demand` on tokens per day (TPD): Limit 200000, Used 197117, Requested 4098. Please try again in 8m44.88s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}"
+    },
+    {
+      "question_id": 8,
+      "question": "Describe the Verilog multiplexing and bit-slicing logic required in the memory writeback stage to properly shift, sign-extend (LB, LH), or zero-extend (LBU, LHU) the 32-bit raw read data from the data memory.",
+      "hyde_used": false,
+      "child_max_tokens": 120,
+      "prompt_tokens": -1,
+      "parents_retrieved": [
+        {
+          "parent_id": "11",
+          "section_title": "2.1.6. Load and Store Instructions",
+          "rrf_score": 0.048916,
+          "child_matched": "The LW instruction loads a 32-bit value from memory into rd . LH loads a 16-bit value from memory, then sign-extends to 32-bits before storing in rd . LHU loads a 16-bit value from memory but then zero extends to 32-bits before storing in rd . LB and LBU are defined analogously for 8-bit values. The SW, SH, and SB instructions store 32-bit, 16-bit, and 8-bit values from the low bits of register rs2 to memory."
+        },
+        {
+          "parent_id": "3",
+          "section_title": "2.1.3. Immediate Encoding Variants",
+          "rrf_score": 0.031498,
+          "child_matched": "Sign extension is one of the most critical operations on immediates (particularly for XLEN>32), and in RISC-V the sign bit for all immediates is always held in bit 31 of the instruction to allow sign extension to proceed in parallel with instruction decoding. Although more complex implementations might have separate adders for branch and jump calculations and so would not benefit from keeping the location of immediate bits constant across types of instruction, we wanted to reduce the hardware cost of the simplest implementations. By rotating bits in the instruction encoding of B and J immediates instead of using dynamic hardware multiplexers to multiply the immediate by 2, we reduce instruction signal fanout and immediate multiplexer costs by around a factor of 2. The scrambled immediate encoding will add negligible time to static or ahead-of-time compilation. For dynamic generation of instructions, there is some small additional overhead, but the most common short forward branches have straightforward immediate encodings."
+        },
+        {
+          "parent_id": "rv32ui_ld_st",
+          "section_title": "rv32ui Test: LD_ST",
+          "rrf_score": 0.030536,
+          "child_matched": "Test sb and lbu (unsigned byte)\n TEST_LD_ST_BYPASS(14, lbu, sb, 0x33, 0, tdat );\n TEST_LD_ST_BYPASS(15, lbu, sb, 0x23, 1, tdat );\n TEST_LD_ST_BYPASS(16, lbu, sb, 0x22, 2, tdat );\n TEST_LD_ST_BYPASS(17, lbu, sb, 0x12, 3, tdat );\n TEST_LD_ST_BYPASS(18, lbu, sb, 0x11, 4, tdat );\n TEST_LD_ST_BYPASS(19, lbu, sb, 0x01, 5, tdat );"
+        }
+      ],
+      "answer": "[LLM ERROR] Error code: 429 - {'error': {'message': 'Rate limit reached for model `openai/gpt-oss-20b` in organization `org_01kgakhd12fega7mnjby4my7s1` service tier `on_demand` on tokens per day (TPD): Limit 200000, Used 197117, Requested 6036. Please try again in 22m42.096s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}"
+    },
+    {
+      "question_id": 9,
+      "question": "How do you implement the Verilog logic to clear the LSB for JALR target addresses (`& ~1`), and simultaneously assert an `instruction_misaligned` exception signal if the resulting branch or jump target is not 32-bit aligned?",
+      "hyde_used": false,
+      "child_max_tokens": 120,
+      "prompt_tokens": -1,
+      "parents_retrieved": [
+        {
+          "parent_id": "9",
+          "section_title": "2.1.5.1. Unconditional Jumps",
+          "rrf_score": 0.048652,
+          "child_matched": "The JAL and JALR instructions will generate an instruction-address-misaligned exception if the target address is not aligned to a four-byte boundary."
+        },
+        {
+          "parent_id": "10",
+          "section_title": "2.1.5.2. Conditional Branches",
+          "rrf_score": 0.046409,
+          "child_matched": "The conditional branch instructions will generate an instruction-address-misaligned exception if the target address is not aligned to a four-byte boundary and the branch condition evaluates to true. If the branch condition evaluates to false, the instruction-address-misaligned exception will not be raised."
+        },
+        {
+          "parent_id": "picorv32_picorv32_41",
+          "section_title": "always @* begin",
+          "rrf_score": 0.029631,
+          "child_matched": "```verilog\nalways @* begin\n if (resetn) begin\n // instruction fetches are read-only\n if (mem_valid && mem_instr)\n assert (mem_wstrb == 0);"
+        }
+      ],
+      "answer": "[LLM ERROR] Error code: 429 - {'error': {'message': 'Rate limit reached for model `openai/gpt-oss-20b` in organization `org_01kgakhd12fega7mnjby4my7s1` service tier `on_demand` on tokens per day (TPD): Limit 200000, Used 197116, Requested 5000. Please try again in 15m14.112s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}"
+    },
+    {
+      "question_id": 10,
+      "question": "Explain the SystemVerilog implementation of the ALU's right-shift unit, specifically how to distinguish between SRL (logical) and SRA (arithmetic) utilizing the `$signed()` system task or manual sign-bit replication to avoid synthesis mismatches.",
+      "hyde_used": false,
+      "child_max_tokens": 120,
+      "prompt_tokens": -1,
+      "parents_retrieved": [
+        {
+          "parent_id": "6",
+          "section_title": "2.1.4.2. Integer Register-Register Instructions",
+          "rrf_score": 0.048916,
+          "child_matched": "SLL, SRL, and SRA perform logical left, logical right, and arithmetic right shifts on the value in register rs1 by the shift amount held in the lower 5 bits of register rs2 ."
+        },
+        {
+          "parent_id": "5",
+          "section_title": "2.1.4.1. Integer Register-Immediate Instructions",
+          "rrf_score": 0.047123,
+          "child_matched": "Shifts by a constant are encoded as a specialization of the I-type format. The operand to be shifted is in rs1 , and the shift amount is encoded in the lower 5 bits of the I-immediate field. The right-shift type is encoded in bit 30. SLLI is a logical left shift (zeros are shifted into the lower bits); SRLI is a logical right shift (zeros are shifted into the upper bits); and SRAI is an arithmetic right shift (the original sign bit is copied into the vacated upper bits)."
+        },
+        {
+          "parent_id": "2",
+          "section_title": "2.1.2. Base Instruction Formats",
+          "rrf_score": 0.030536,
+          "child_matched": "The RISC-V ISA keeps the source ( rs1 and rs2 ) and destination ( rd ) registers at the same position in all formats to simplify decoding. Except for the 5-bit immediates used in CSR instructions ( CSR Instructions ), immediates are always sign-extended , and are generally packed towards the leftmost available bits in the instruction and have been allocated to reduce hardware complexity. In particular, the sign bit for all immediates is always in bit 31 of the instruction to speed sign-extension circuitry."
+        }
+      ],
+      "answer": "[LLM ERROR] Error code: 429 - {'error': {'message': 'Rate limit reached for model `openai/gpt-oss-20b` in organization `org_01kgakhd12fega7mnjby4my7s1` service tier `on_demand` on tokens per day (TPD): Limit 200000, Used 197115, Requested 3934. Please try again in 7m33.167999999s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing', 'type': 'tokens', 'code': 'rate_limit_exceeded'}}"
+    }
+  ]
+}
