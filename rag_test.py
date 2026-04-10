@@ -28,10 +28,13 @@ Usage:
 """
 
 import os
-import sys
 import re
+import sys
 import json
 import time
+import argparse
+import uuid
+from typing import List, Dict
 from pathlib import Path
 from collections import defaultdict
 from dotenv import load_dotenv
@@ -44,23 +47,20 @@ from groq import Groq
 
 load_dotenv()
 
-CHUNK_FILES     = [
-    "scraped data/rv32_chunks.json",
-    "scraped data/testbench_chunks.json",
-]
-CHROMA_DIR      = "chroma_store_v3"       # fresh store, separate from v1/v2
-COLLECTION_NAME = "rv32i_children"
+CHROMA_DIR      = "chroma_store_v3"
+COLLECTION_NAME = "rag_children_v3"
 EMBED_MODEL     = "all-MiniLM-L6-v2"
 LLM_MODEL       = "openai/gpt-oss-20b"
+DATA_DIR        = "scraped data"   # ← drop a new *_chunks.json here and it auto-ingests
 
-CHILD_MAX_TOKENS  = 120       # soft cap for sentence-packer (testbench chunks)
-TOP_K_CHILDREN    = 12        # children retrieved before parent dedup
-TOP_K_PARENTS     = 4         # unique full parents sent to LLM
+CHILD_MAX_TOKENS  = 120
+TOP_K_CHILDREN    = 12
+TOP_K_PARENTS     = 3
 RRF_K             = 60
 BM25_FETCH        = 15
 USE_HYDE          = "--no-hyde" not in sys.argv
-OUTPUT_FILE       = "rag_test_results_v3.json"
-DATA_DIR          = "scraped data"
+RESULTS_DIR       = "results"
+MANIFEST_FILE     = f"{CHROMA_DIR}/manifest.json"  # tracks ingested slug hashes
 
 # ── Test Questions ─────────────────────────────────────────────────────────────
 
@@ -177,8 +177,9 @@ def load_children_from_full_doc(full_doc_path: str, parent_store: dict) -> list[
 
         paras = paragraphs_from_markdown_section(section_text)
         for j, para in enumerate(paras):
+            unique_hex = uuid.uuid4().hex[:6]
             children.append({
-                "child_id":      f"{pid}__p{j}",
+                "child_id":      f"{pid}__p{j}_{unique_hex}",
                 "parent_id":     pid,
                 "text":          para,
                 "section_title": section_title,
@@ -190,83 +191,128 @@ def load_children_from_full_doc(full_doc_path: str, parent_store: dict) -> list[
     return children
 
 
-def build_hierarchy() -> tuple[dict, list[dict]]:
+def _file_hash(path: Path) -> str:
+    """MD5 hash of a file's content — used to detect if a chunk file changed."""
+    import hashlib
+    return hashlib.md5(path.read_bytes()).hexdigest()
+
+
+def load_manifest() -> dict:
+    """Load the ingestion manifest (slug → file_hash) from disk."""
+    p = Path(MANIFEST_FILE)
+    if p.exists():
+        with open(p, encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+def save_manifest(manifest: dict):
+    """Persist the manifest back to disk."""
+    Path(CHROMA_DIR).mkdir(exist_ok=True)
+    with open(MANIFEST_FILE, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+
+
+def build_hierarchy() -> tuple[dict, list[dict], list[dict]]:
     """
     Dynamically scan the DATA_DIR for all *_chunks.json files.
     Returns:
-      parent_store : dict[str → chunk_dict]   (full parent text, NOT embedded)
-      all_children : list[child_dict]          (atomic units, embedded into VDB)
+      parent_store   : dict[str → chunk_dict]  (ALL parents, for retrieval)
+      all_children   : list[child_dict]         (ALL children, for BM25)
+      new_children   : list[child_dict]         (only CHANGED/NEW ones, for ChromaDB)
     """
     parent_store: dict[str, dict] = {}
     all_children: list[dict] = []
-    
+    new_children: list[dict] = []
+
     data_dir = Path(DATA_DIR)
     if not data_dir.exists():
         print(f"  [ERROR] {DATA_DIR} not found.")
-        return parent_store, all_children
+        return parent_store, all_children, new_children
 
     json_files = list(data_dir.glob("*_chunks.json"))
     if not json_files:
         print(f"  [WARN] No *_chunks.json files found in {DATA_DIR}.")
 
+    manifest = load_manifest()
+
     for json_path in json_files:
         slug = json_path.name.replace("_chunks.json", "")
         md_path = data_dir / f"{slug}_full_doc.md"
-        
-        # Load Parents
+        current_hash = _file_hash(json_path)
+        is_new = manifest.get(slug) != current_hash
+
+        # Load Parents (always — needed for retrieval)
         with open(json_path, encoding="utf-8") as f:
             chunks = json.load(f)
-            
+
         for c in chunks:
             pid = str(c.get("chunk_id", ""))
             if pid:
                 parent_store[pid] = c
-                
-        # Try markdown paragraph splitting first
-        children = []
+
+        # Build children for this slug
+        children: list[dict] = []
         if md_path.exists():
             children = load_children_from_full_doc(str(md_path), parent_store)
-            
-        if children:
-            print(f"  ✓ {slug}: {len(chunks)} parents → {len(children)} children (Markdown Split)")
-        else:
-            # Fallback to Sentence Packer
+
+        if not children:
             for c in chunks:
                 pid = str(c.get("chunk_id", ""))
                 if not pid: continue
                 text = c.get("document_text", "")[:8000]
                 for j, ctext in enumerate(sentence_pack_children(text)):
+                    unique_hex = uuid.uuid4().hex[:6]
                     children.append({
-                        "child_id":      f"{pid}__c{j}",
+                        "child_id":      f"{pid}__c{j}_{unique_hex}",
                         "parent_id":     pid,
                         "text":          ctext,
                         "section_title": str(c.get("section_title", "")),
                         "document_type": str(c.get("document_type", "unknown")),
                         "source_url":    str(c.get("source_url", "")),
                     })
-            print(f"  ✓ {slug}: {len(chunks)} parents → {len(children)} children (Sentence Pack Fallback)")
-            
+
         all_children.extend(children)
 
-    print(f"\n  Total Hierarchy: {len(parent_store)} unique parents, {len(all_children)} atomic children.")
-    return parent_store, all_children
+        tag = "[NEW]" if is_new else "[cached]"
+        src = "Markdown Split" if md_path.exists() else "Sentence Pack"
+        print(f"  {tag} {slug}: {len(chunks)} parents → {len(children)} children ({src})")
+
+        if is_new:
+            new_children.extend(children)
+            manifest[slug] = current_hash  # update after processing
+
+    save_manifest(manifest)
+    print(f"\n  Total : {len(parent_store)} parents | {len(all_children)} children | {len(new_children)} NEW to embed.")
+    return parent_store, all_children, new_children
 
 
-def build_chroma_children(children: list[dict], embedder: SentenceTransformer):
-    """Embed all children and upsert into ChromaDB."""
+def build_chroma_children(new_children: list[dict], embedder: SentenceTransformer):
+    """
+    Incrementally upsert only NEW children into the persistent ChromaDB.
+    The collection is NEVER wiped — existing embeddings from previous runs are kept.
+    If new_children is empty, just opens the existing collection.
+    """
     client = chromadb.PersistentClient(path=CHROMA_DIR)
+    # Get-or-create (never delete)
     try:
-        client.delete_collection(COLLECTION_NAME)
+        collection = client.get_collection(name=COLLECTION_NAME)
+        existing_count = collection.count()
     except Exception:
-        pass
-    collection = client.create_collection(
-        name=COLLECTION_NAME,
-        metadata={"hnsw:space": "cosine"}
-    )
+        collection = client.create_collection(
+            name=COLLECTION_NAME,
+            metadata={"hnsw:space": "cosine"}
+        )
+        existing_count = 0
+
+    if not new_children:
+        print(f"  ChromaDB up-to-date. {existing_count} children already indexed.")
+        return collection
+
     BATCH = 100
-    total = len(children)
+    total = len(new_children)
     for i in range(0, total, BATCH):
-        batch = children[i: i + BATCH]
+        batch = new_children[i: i + BATCH]
         ids        = [c["child_id"] for c in batch]
         documents  = [c["text"] for c in batch]
         metas      = [{
@@ -279,8 +325,8 @@ def build_chroma_children(children: list[dict], embedder: SentenceTransformer):
         embeddings = embedder.encode(documents, show_progress_bar=False).tolist()
         collection.upsert(ids=ids, documents=documents,
                           embeddings=embeddings, metadatas=metas)
-        print(f"  Embedded {min(i+BATCH, total)}/{total} children...", end="\r")
-    print(f"\n  ChromaDB child collection built: {total} children.")
+        print(f"  Embedded {min(i+BATCH, total)}/{total} new children...", end="\r")
+    print(f"\n  ChromaDB updated: +{total} new children (total: {collection.count()}).")
     return collection
 
 
@@ -459,9 +505,9 @@ def main():
           + (" + HyDE" if USE_HYDE else ""))
     print("=" * 68)
 
-    # ── 1. Build hierarchy ────────────────────────────────────────────────────
+    # ── 1. Build hierarchy ──────────────────────────────────────────────────────
     print("\n[1/5] Building parent store + child chunks...")
-    parent_store, children = build_hierarchy()
+    parent_store, children, new_children = build_hierarchy()
 
     # ── 2. BM25 on children ───────────────────────────────────────────────────
     print("\n[2/5] Building BM25 index over children...")
@@ -473,8 +519,8 @@ def main():
     embedder = SentenceTransformer(EMBED_MODEL)
     print(f"  Dim: {embedder.get_sentence_embedding_dimension()}")
 
-    print(f"\n[4/5] Embedding {len(children)} children into ChromaDB...")
-    collection = build_chroma_children(children, embedder)
+    print(f"\n[4/5] Incrementally embedding into ChromaDB...")
+    collection = build_chroma_children(new_children, embedder)
 
     # ── 4. Evaluate ───────────────────────────────────────────────────────────
     print(f"\n[5/5] Running {len(EVAL_QUESTIONS)} questions...")
@@ -541,10 +587,23 @@ def main():
             "answer": answer,
         })
 
-        time.sleep(1.5)
+        time.sleep(10.0)
 
     # ── 5. Save ───────────────────────────────────────────────────────────────
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+    out_dir = Path(RESULTS_DIR)
+    out_dir.mkdir(exist_ok=True)
+
+    # Find the next incremental ID
+    existing = list(out_dir.glob("rag_test_results_v3_*.json"))
+    max_id = 0
+    for f_path in existing:
+        m = re.search(r'_v3_(\d+)\.json$', f_path.name)
+        if m:
+            max_id = max(max_id, int(m.group(1)))
+    next_id = max_id + 1
+    output_file = out_dir / f"rag_test_results_v3_{next_id}.json"
+
+    with open(output_file, "w", encoding="utf-8") as f:
         json.dump({
             "version":           "v3-parent-child",
             "model":             LLM_MODEL,
@@ -560,7 +619,7 @@ def main():
         }, f, indent=2, ensure_ascii=False)
 
     print("=" * 68)
-    print(f"  Results → {OUTPUT_FILE}")
+    print(f"  Results → {output_file}")
     print(f"  Corpus: {len(parent_store)} parents expanded to {len(children)} children")
     print("=" * 68)
 
