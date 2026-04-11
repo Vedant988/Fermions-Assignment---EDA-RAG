@@ -474,7 +474,7 @@ MANDATORY OUTPUT — valid JSON only, no prose:
     {"phase": 3, "goal": "Branches + Jumps: passes rv32ui-p-beq, jal, jalr",          "modules": ["branch_unit","pc_next"]},
     {"phase": 4, "goal": "Loads + Stores: passes rv32ui-p-lb through sw",             "modules": ["load_store"]}
   ],
-  "tohost_address": "0x80001000",
+  "tohost_address": "0x80001000",  // TESTBENCH USE ONLY — do not instantiate in top.v
   "reset_pc": "0x00000000"
 }
 """
@@ -493,64 +493,79 @@ SCHEMA (every field is MANDATORY):
   "opcode":      "0110011",    // 7-bit binary string
   "funct3":      "000",        // 3-bit binary string, "N/A" for U/J
   "funct7":      "0000000",    // 7-bit binary string, "N/A" for non R-type
-  "ALU_op":      "ADD",        // True ALU primitive: ADD SUB AND OR XOR SLT SLTU SLL SRL SRA PASS_B
-                               //   NEVER use an instruction name here (AUIPC, LUI, JAL are NOT ALU ops)
+  "ALU_op":      "ADD",        // ALU primitive: ADD SUB AND OR XOR SLT SLTU SLL SRL SRA
+                               //   NEVER PASS_B — use result_src="imm" to bypass ALU instead
   "alu_src_a":   "rs1",        // First ALU operand mux: "rs1" | "pc" | "zero"
   "alu_src_b":   "rs2",        // Second ALU operand mux: "rs2" | "imm"
+  "result_src":  "alu",        // Writeback DATA source mux: "alu" | "mem" | "pc+4" | "imm"
+                               //   LUI → "imm" (bypasses ALU), AUIPC → "alu", Loads → "mem"
   "reg_write":   1,            // 1 = writes to rd, 0 = does not
   "mem_read":    0,            // 1 = load instruction
   "mem_write":   0,            // 1 = store instruction
   "mem_size":    "N/A",        // data width: "8" | "16" | "32" | "N/A"
   "mem_extend":  "N/A",        // "signed" | "unsigned" | "N/A"
   "branch":      0,            // 1 = conditional branch
+  "branch_type": "N/A",        // "eq"|"ne"|"lt"|"ge"|"ltu"|"geu"|"N/A"  — used by branch_unit comparator directly
   "jump":        0,            // 1 = unconditional jump (JAL/JALR)
-  "wb_src":      "alu",        // writeback mux: "alu" | "mem" | "pc+4"
+  "jump_type":   "N/A",        // "jal" | "jalr" | "N/A"  — JALR requires pc_next to clear LSB: target &= ~1
   "imm_type":    "N/A",        // "I" | "S" | "B" | "U" | "J" | "N/A"
   "notes":       ""
 }
 
-FOUR CANONICAL EXAMPLES (study these carefully before generating):
+FIVE CANONICAL EXAMPLES (study before generating):
 
-Example 1 — ADD (R-type, register ALU):
+Example 1 — ADD (R-type, both regs into ALU):
 {
   "instruction": "ADD", "format": "R", "opcode": "0110011", "funct3": "000", "funct7": "0000000",
-  "ALU_op": "ADD", "alu_src_a": "rs1", "alu_src_b": "rs2",
+  "ALU_op": "ADD", "alu_src_a": "rs1", "alu_src_b": "rs2", "result_src": "alu",
   "reg_write": 1, "mem_read": 0, "mem_write": 0, "mem_size": "N/A", "mem_extend": "N/A",
-  "branch": 0, "jump": 0, "wb_src": "alu", "imm_type": "N/A", "notes": ""
+  "branch": 0, "branch_type": "N/A", "jump": 0, "jump_type": "N/A", "imm_type": "N/A", "notes": ""
 }
 
-Example 2 — SB (S-type store byte — alu_src_b MUST be imm for address calc):
+Example 2 — LUI (U-type — imm bypasses ALU entirely via result_src, ALU is IDLE):
 {
-  "instruction": "SB", "format": "S", "opcode": "0100011", "funct3": "000", "funct7": "N/A",
-  "ALU_op": "ADD", "alu_src_a": "rs1", "alu_src_b": "imm",
-  "reg_write": 0, "mem_read": 0, "mem_write": 1, "mem_size": "8", "mem_extend": "N/A",
-  "branch": 0, "jump": 0, "wb_src": "N/A", "imm_type": "S", "notes": "addr = rs1 + imm; data = rs2[7:0]"
+  "instruction": "LUI", "format": "U", "opcode": "0110111", "funct3": "N/A", "funct7": "N/A",
+  "ALU_op": "ADD", "alu_src_a": "zero", "alu_src_b": "imm", "result_src": "imm",
+  "reg_write": 1, "mem_read": 0, "mem_write": 0, "mem_size": "N/A", "mem_extend": "N/A",
+  "branch": 0, "branch_type": "N/A", "jump": 0, "jump_type": "N/A", "imm_type": "U",
+  "notes": "rd = imm<<12; result_src=imm bypasses ALU — the mux routes imm directly to regfile"
 }
 
-Example 3 — LB (I-type load byte signed — mem_size and mem_extend are critical):
+Example 3 — BEQ (B-type — branch_type drives dedicated comparator, NOT ALU subtraction):
+{
+  "instruction": "BEQ", "format": "B", "opcode": "1100011", "funct3": "000", "funct7": "N/A",
+  "ALU_op": "ADD", "alu_src_a": "rs1", "alu_src_b": "rs2", "result_src": "N/A",
+  "reg_write": 0, "mem_read": 0, "mem_write": 0, "mem_size": "N/A", "mem_extend": "N/A",
+  "branch": 1, "branch_type": "eq", "jump": 0, "jump_type": "N/A", "imm_type": "B",
+  "notes": "branch_unit receives branch_type=eq and compares rs1==rs2 directly"
+}
+
+Example 4 — JALR (I-type — jump_type=jalr triggers LSB clear on target address):
+{
+  "instruction": "JALR", "format": "I", "opcode": "1100111", "funct3": "000", "funct7": "N/A",
+  "ALU_op": "ADD", "alu_src_a": "rs1", "alu_src_b": "imm", "result_src": "pc+4",
+  "reg_write": 1, "mem_read": 0, "mem_write": 0, "mem_size": "N/A", "mem_extend": "N/A",
+  "branch": 0, "branch_type": "N/A", "jump": 1, "jump_type": "jalr", "imm_type": "I",
+  "notes": "pc_next MUST clear bit[0]: target = (rs1+imm) & ~32'h1. rd = pc+4"
+}
+
+Example 5 — LB (I-type load — result_src=mem, mem_size and mem_extend critical):
 {
   "instruction": "LB", "format": "I", "opcode": "0000011", "funct3": "000", "funct7": "N/A",
-  "ALU_op": "ADD", "alu_src_a": "rs1", "alu_src_b": "imm",
+  "ALU_op": "ADD", "alu_src_a": "rs1", "alu_src_b": "imm", "result_src": "mem",
   "reg_write": 1, "mem_read": 1, "mem_write": 0, "mem_size": "8", "mem_extend": "signed",
-  "branch": 0, "jump": 0, "wb_src": "mem", "imm_type": "I", "notes": "rd = sign_ext(mem[rs1+imm][7:0])"
-}
-
-Example 4 — AUIPC (U-type — ALU_op is ADD, alu_src_a is PC, NOT 'AUIPC'):
-{
-  "instruction": "AUIPC", "format": "U", "opcode": "0010111", "funct3": "N/A", "funct7": "N/A",
-  "ALU_op": "ADD", "alu_src_a": "pc", "alu_src_b": "imm",
-  "reg_write": 1, "mem_read": 0, "mem_write": 0, "mem_size": "N/A", "mem_extend": "N/A",
-  "branch": 0, "jump": 0, "wb_src": "alu", "imm_type": "U", "notes": "rd = PC + (imm << 12)"
+  "branch": 0, "branch_type": "N/A", "jump": 0, "jump_type": "N/A", "imm_type": "I",
+  "notes": "rd = sign_ext(mem[rs1+imm][7:0])"
 }
 
 ADDITIONAL RULES:
-1. ALU_op MUST be a primitive: ADD SUB AND OR XOR SLT SLTU SLL SRL SRA PASS_B — NEVER an instruction name.
-2. LUI: ALU_op=PASS_B, alu_src_a=zero, alu_src_b=imm (ALU just passes the shifted immediate through).
-3. All R-type instructions share opcode 0110011 — this is correct, funct3/funct7 differentiate them.
-4. mem_size: LB/SB=8, LH/SH=16, LW/SW=32. mem_extend: LB/LH=signed, LBU/LHU=unsigned, stores=N/A.
-5. Branches: alu_src_a=rs1, alu_src_b=rs2 (ALU compares operands), wb_src=N/A, reg_write=0.
-6. JAL: alu_src_a=pc, alu_src_b=imm, ALU_op=ADD (computes target), wb_src=pc+4.
-7. JALR: alu_src_a=rs1, alu_src_b=imm, ALU_op=ADD, wb_src=pc+4.
+1. LUI: result_src="imm" — the final mux routes the shifted immediate DIRECTLY to regfile, bypassing ALU.
+2. AUIPC: ALU_op=ADD, alu_src_a=pc, result_src="alu" (ALU genuinely computes PC+imm).
+3. Branches: ALU_op=ADD (unused), branch_type="eq"|"ne"|"lt"|"ge"|"ltu"|"geu". branch_unit uses branch_type directly.
+4. JALR: jump_type="jalr" — pc_next module MUST apply & ~1 to the computed target.
+5. JAL: jump_type="jal" — no LSB clear needed.
+6. mem_size: LB/SB=8, LH/SH=16, LW/SW=32. mem_extend: LB/LH=signed, LBU/LHU=unsigned, stores=N/A.
+7. All R-type instructions share opcode 0110011 — correct; funct3/funct7 differentiate them.
 """
 
 
@@ -558,38 +573,51 @@ ADDITIONAL RULES:
 RTL_GENERATOR_SYSTEM = """You are the RTL Generator Agent for a RISC-V single-cycle processor.
 
 ARCHITECTURE MANDATE — SINGLE-CYCLE ONLY:
-This is a single-cycle implementation. Every instruction completes in exactly one clock cycle.
-DO NOT generate any of the following — they belong to a pipelined architecture:
+Every instruction completes in exactly one clock cycle. DO NOT generate:
   ✗ Pipeline stage registers (IF_ID, ID_EX, EX_MEM, MEM_WB)
-  ✗ Hazard detection units
-  ✗ Forwarding multiplexers
-  ✗ Stall logic
-  ✗ Flush signals
-Violating these constraints will produce code that passes synthesis but fails rv32ui-p-add immediately.
+  ✗ Hazard detection units, forwarding muxes, stall logic, flush signals
+  ✗ Internal memory arrays (SRAM/BRAM). The CPU interfaces with external memory.
+Violating this will fail rv32ui-p-add on the very first RAW hazard.
 
 You receive:
-- Module name + its dependencies (from the Planner DAG).
-- The full ISA control signal truth table (from ISA Expert) — this is ground truth for all encodings.
-- Architecture-level constants (reset_pc, tohost_address).
+- Module name + its DAG dependencies.
+- The full ISA control signal truth table from ISA Expert — ground truth for all encodings.
+- Architecture-level constants (reset_pc only — tohost belongs in the testbench, NOT in top.v).
 
-PER-MODULE PORT CONTRACTS (use EXACTLY these port names for correct interconnect in top.v):
-  regfile    : clk, we, rs1, rs2, rd, rd_data → rd1[31:0], rd2[31:0]
-  imm_gen    : instr[31:0] → imm[31:0]
+PER-MODULE PORT CONTRACTS (use EXACTLY these port names for interconnect):
+  regfile    : clk, we, rs1[4:0], rs2[4:0], rd[4:0], rd_data[31:0] 
+               → rd1[31:0], rd2[31:0]   (x0 hardwired: write guarded by `if (rd != 0)`)
+  imm_gen    : instr[31:0], imm_type[2:0] → imm[31:0]
   alu        : a[31:0], b[31:0], alu_op[3:0] → result[31:0], zero
-  branch_unit: funct3[2:0], rs1[31:0], rs2[31:0] → taken
-  load_store : clk, mem_read, mem_write, mem_size[1:0], mem_extend, addr[31:0], wdata[31:0] → rdata[31:0]
-  control    : opcode[6:0], funct3[2:0], funct7[6:0] → all control signals (alu_src_a, alu_src_b, reg_write, mem_read, mem_write, mem_size, mem_extend, branch, jump, wb_src, alu_op, imm_type)
-  pc_next    : pc[31:0], imm[31:0], rs1[31:0], taken, jump, branch, jump_type → pc_next[31:0]
-  top        : clk, rst → (instantiates all sub-modules; writes tohost on test end)
+  branch_unit: branch_type[2:0], rs1[31:0], rs2[31:0] → taken
+               (branch_type encodes: 0=eq,1=ne,2=lt,3=ge,4=ltu,5=geu from ISA table)
+               (DO NOT use ALU output — this is a dedicated parallel comparator)
+  load_store : mem_read, mem_write, mem_size[1:0], mem_extend, addr[31:0], wdata[31:0], mem_rdata[31:0] 
+               → rdata[31:0], mem_addr[31:0], mem_wdata[31:0], mem_wstrb[3:0]
+  control    : opcode[6:0], funct3[2:0], funct7b5 → 
+               alu_src_a[1:0], alu_src_b, result_src[1:0], 
+               reg_write, mem_read, mem_write, mem_size[1:0], mem_extend, 
+               branch, branch_type[2:0], jump, jump_type, alu_op[3:0], imm_type[2:0]
+  pc_next    : pc[31:0], imm[31:0], rs1[31:0], taken, jump, jump_type → pc_next[31:0]
+               CRITICAL: if jump_type=1 (JALR), apply `pc_next = (rs1+imm) & ~32'h1` (clear LSB)
+  top        : clk, resetn, imem_rdata[31:0], dmem_rdata[31:0] 
+               → imem_addr[31:0], dmem_addr[31:0], dmem_wdata[31:0], dmem_wstrb[3:0], dmem_read, dmem_write
+               (instantiates all sub-modules; pure CPU core, NO tohost logic)
+
+MULTIPLEXER CONTRACTS (Enforce these mappings in top.v and control.v):
+  alu_src_a  = 2'b00: rs1  |  2'b01: pc  |  2'b10: zero
+  alu_src_b  = 1'b0: rs2   |  1'b1: imm
+  result_src = 2'b00: alu  |  2'b01: mem |  2'b10: pc+4 | 2'b11: imm (LUI bypass)
 
 RULES:
-- Use `always_comb` for combinational logic. Every `case` MUST have a `default` clause (no latches).
-- Use `always_ff @(posedge clk)` for sequential elements (regfile, PC register).
-- Register x0 in regfile: gate write-enable as `if (rd != 5'd0)`.
-- For control.v: drive all control signals from opcode/funct3/funct7 using the ISA truth table.
-- Add a one-line comment on every non-obvious signal assignment.
-- Do NOT generate a testbench. Module definition only.
-Output ONLY the Verilog code, no prose before or after.
+- STRICT LINTER RULE: All assignments MUST have explicitly matching bit widths. Do NOT rely on implicit zero-extension or truncation. If assigning a 1-bit or 8-bit value to a 32-bit net, you must explicitly pad it (e.g., use `32'b1` instead of `1'b1`, or `{24'b0, val[7:0]}`).
+- Use `always_comb` for combinational logic. Every `case` MUST have a `default` clause.
+- Use `always_ff @(posedge clk or negedge resetn)` for sequential elements (regfile write, PC).
+- x0 write guard: `if (we && rd != 5'd0)` in regfile.
+- control.v: derive all outputs from the ISA truth table using opcode/funct3/funct7b5.
+- Add a one-line comment on every non-obvious assignment.
+- Do NOT generate a testbench or any tohost/HTIF logic. Module definition only.
+Output ONLY the Verilog code inside a ```verilog block, no prose before or after.
 """
 
 
@@ -612,16 +640,135 @@ def llm_call(groq_client, system: str, user: str, limiter, max_tokens: int = 409
         limiter.record(total_est)
         return result
     else:
-        resp = groq_client.chat.completions.create(
-            model="openai/gpt-oss-20b",
-            messages=[{"role": "system", "content": system},
-                      {"role": "user",   "content": user}],
-            temperature=0.1,
-            max_tokens=max_tokens,
-            stream=False,
+        try:
+            resp = groq_client.chat.completions.create(
+                model="openai/gpt-oss-20b",
+                messages=[{"role": "system", "content": system},
+                          {"role": "user",   "content": user}],
+                temperature=0.1,
+                max_tokens=max_tokens,
+                stream=False,
+            )
+            limiter.record(total_est)
+            return resp.choices[0].message.content or ""
+        except Exception as e:
+            return f"// API ERROR: {str(e)}"
+
+
+# ── RTL-specific helpers ───────────────────────────────────────────────────────
+
+def _is_complete_verilog(code: str) -> bool:
+    """Return True if the Verilog output ends with an endmodule (not truncated)."""
+    # Strip markdown fences and whitespace
+    clean = re.sub(r'```[\w]*', '', code).strip()
+    return 'endmodule' in clean
+
+
+# Forbidden RTL patterns — each entry is (regex_pattern, human_description)
+# These are ARCHITECTURE violations, not syntax bugs.
+_RTL_FORBIDDEN = [
+    (
+        r'\blogic\s+\[\d+:\d+\]\s+\w+\s*\[\s*\d+\s*:\s*\d+\s*\]',
+        "Internal memory array declared inside the module (e.g. `logic [31:0] mem [0:1023]`). "
+        "Memory is EXTERNAL to the CPU. The load_store module must expose a flat memory interface: "
+        "output mem_addr[31:0], output mem_wdata[31:0], output mem_wstrb[3:0], input mem_rdata[31:0]. "
+        "Delete the internal array and rewire to these ports."
+    ),
+    (
+        r'\breg\s+\[\d+:\d+\]\s+\w+\s*\[',
+        "Internal memory array using `reg` type found. Memory must be external. "
+        "Expose flat memory bus ports instead."
+    ),
+    (
+        r'\b(IF_ID|ID_EX|EX_MEM|MEM_WB)\b',
+        "Pipeline stage register found. This is a SINGLE-CYCLE architecture. "
+        "Pipeline registers are forbidden. Remove all stage latches."
+    ),
+    (
+        r'\bhazard\b|\bforward\b|\bstall\b|\bflush\b',
+        "Hazard/forward/stall/flush logic found. This is a SINGLE-CYCLE architecture. "
+        "These constructs are forbidden."
+    ),
+]
+
+
+def generate_verilog_with_continuation(
+    groq_client, system: str, user_msg: str, limiter,
+    max_tokens: int = 4096, max_rounds: int = 3
+) -> tuple[str, list[str]]:
+    """
+    Generate a Verilog module with automatic truncation recovery.
+
+    Returns:
+        (final_code, log_messages)  — log_messages is a list of human-readable
+        status strings suitable for display in the Streamlit UI.
+    """
+    logs = []
+    code = llm_call(groq_client, system, user_msg, limiter, max_tokens=max_tokens)
+    logs.append(f"Round 1: generated {len(code)} chars.")
+
+    for rnd in range(2, max_rounds + 2):
+        if _is_complete_verilog(code):
+            logs.append("✅ Module complete (endmodule found).")
+            break
+        logs.append(f"⚠️ Truncation detected (no endmodule). Firing continuation round {rnd}...")
+        continuation_user = (
+            f"The previous generation was cut off. Here is what was generated so far:\n\n"
+            f"```verilog\n{code[-1500:]}\n```\n\n"
+            f"Continue EXACTLY from where it was cut off. "
+            f"Do NOT restart the module from the beginning. "
+            f"Output only the missing Verilog lines up to and including `endmodule`."
         )
-        limiter.record(total_est)
-        return resp.choices[0].message.content or ""
+        extra = llm_call(groq_client, system, continuation_user, limiter, max_tokens=max_tokens)
+        code = code + "\n" + extra
+        logs.append(f"Round {rnd}: appended {len(extra)} more chars.")
+        if rnd == max_rounds + 1:
+            logs.append("🔴 Max continuation rounds reached. Module may still be incomplete.")
+
+    return code, logs
+
+
+def validate_and_repair_verilog(
+    groq_client, system: str, original_user_msg: str,
+    code: str, limiter, max_tokens: int = 4096
+) -> tuple[str, list[str]]:
+    """
+    Scan generated Verilog for forbidden architectural patterns.
+    If any are found, fire an automatic LLM repair call describing the exact violation.
+
+    Returns:
+        (final_code, log_messages)
+    """
+    logs = []
+    violations = []
+    for pattern, description in _RTL_FORBIDDEN:
+        if re.search(pattern, code, re.IGNORECASE):
+            violations.append(description)
+
+    if not violations:
+        logs.append("✅ No architectural violations detected.")
+        return code, logs
+
+    violation_text = "\n".join(f"- {v}" for v in violations)
+    logs.append(f"🔴 {len(violations)} violation(s) found. Firing auto-repair call...")
+    logs.append(violation_text)
+
+    repair_user = (
+        f"{original_user_msg}\n\n"
+        f"CRITICAL: Your previous output contained architectural violations that must be fixed:\n"
+        f"{violation_text}\n\n"
+        f"Here is the violating code:\n```verilog\n{code}\n```\n\n"
+        f"Rewrite the COMPLETE module fixing EVERY violation listed above. "
+        f"Output ONLY the corrected Verilog module, no prose."
+    )
+    repaired = llm_call(groq_client, system, repair_user, limiter, max_tokens=max_tokens)
+    if not repaired.strip() or repaired.startswith("// API ERROR"):
+        logs.append(f"🔴 Repair call failed or returned empty string. Keeping original violating code.")
+        return code, logs
+
+    logs.append(f"✅ Repair call returned {len(repaired)} chars.")
+    return repaired, logs
+
 
 
 def parse_json_safe(text: str):
@@ -946,7 +1093,6 @@ with tab_agent:
                     mod_spec = next((m for m in modules if m["name"] == mod_name), {})
                     user_msg = textwrap.dedent(f"""
                     Architecture: {arch}
-                    tohost address: {plan.get('tohost_address', '0x80001000')}
                     Reset PC: {plan.get('reset_pc', '0x00000000')}
 
                     Module to generate: {mod_name}
@@ -958,13 +1104,28 @@ with tab_agent:
                     Generate the complete synthesizable Verilog module for `{mod_name}`.
                     """).strip()
 
-                    verilog = llm_call(groq_client, RTL_GENERATOR_SYSTEM, user_msg,
-                                       limiter, max_tokens=4096)
+                    # Step 1: Generate with automatic truncation continuation
+                    verilog, cont_logs = generate_verilog_with_continuation(
+                        groq_client, RTL_GENERATOR_SYSTEM, user_msg, limiter, max_tokens=4096
+                    )
+                    # Step 2: Validate and auto-repair architectural violations
+                    verilog, val_logs = validate_and_repair_verilog(
+                        groq_client, RTL_GENERATOR_SYSTEM, user_msg, verilog, limiter, max_tokens=4096
+                    )
                     all_rtl[mod_name] = verilog
+                    # Surface the engine logs so the user can see what happened
+                    for msg in cont_logs + val_logs:
+                        if msg.startswith("✅"):
+                            st.caption(f"`{mod_name}` · {msg}")
+                        elif msg.startswith(("⚠️", "🔴")):
+                            st.warning(f"`{mod_name}` · {msg}")
+                        else:
+                            st.caption(f"`{mod_name}` · {msg}")
 
                 rtl_progress.progress(1.0, text="✅ RTL generation complete.")
                 st.session_state.agent_rtl = all_rtl
-                st.success(f"✅ Generated {len(selected_mods)} module(s).")
+                saved = save_pipeline_snapshot("rtl")
+                st.success(f"✅ Generated {len(selected_mods)} module(s). Auto-saved to `{saved.name}`")
 
         if st.session_state.agent_rtl:
             rtl = st.session_state.agent_rtl
@@ -977,13 +1138,74 @@ with tab_agent:
                 for fname, code in rtl.items():
                     zobj.writestr(f"{fname}.v", code)
             zip_buf.seek(0)
-            st.download_button(
-                "💾 Download All (.zip)",
-                data=zip_buf,
-                file_name="riscv_rtl.zip",
-                mime="application/zip",
-                use_container_width=False,
-            )
+            col_dl, col_sync, col_clean = st.columns([1, 1, 1])
+            with col_dl:
+                st.download_button(
+                    "💾 Download All (.zip)",
+                    data=zip_buf,
+                    file_name="riscv_rtl.zip",
+                    mime="application/zip",
+                    use_container_width=True,
+                )
+            with col_sync:
+                if st.button("🔄 Sync UI with Disk", use_container_width=True):
+                    # Find latest run with an rtl folder
+                    run_dirs = sorted([d for d in (PROJECT_ROOT / "pipeline_runs").glob("run_v*") if (d / "rtl").exists()])
+                    if run_dirs:
+                        latest_rtl = run_dirs[-1] / "rtl"
+                        for v_file in latest_rtl.glob("*.v"):
+                            with open(v_file, "r", encoding="utf-8") as f:
+                                st.session_state.agent_rtl[v_file.stem] = f.read()
+                        st.success(f"UI synced with `{latest_rtl.parent.name}`!")
+                        st.rerun()
+                    else:
+                        st.error("No valid rtl folders found on disk.")
+            
+            with col_clean:
+                if st.button("🧹 Clean Verilog (Lint Ready)", use_container_width=True):
+                    cleaned_params = {}
+                    for mod_name, code in st.session_state.agent_rtl.items():
+                        clean_code = re.sub(r'^```[a-zA-Z]*\n', '', code, flags=re.MULTILINE)
+                        clean_code = re.sub(r'\n```$', '', clean_code)
+                        clean_code = clean_code.strip()
+                        cleaned_params[mod_name] = clean_code
+                    st.session_state.agent_rtl = cleaned_params
+                    saved_clean = save_pipeline_snapshot("cleaned")
+                    st.success(f"Fixed formatting! Saved to `{saved_clean.name}`")
+                    st.rerun()
+
+            if st.button("🔍 Run Verilator Lint Check", use_container_width=True, type="secondary"):
+                import tempfile
+                with st.spinner("Running Verilator..."):
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        v_files = []
+                        for mod_name, code in st.session_state.agent_rtl.items():
+                            fpath = os.path.join(tmpdir, f"{mod_name}.v")
+                            with open(fpath, "w", encoding="utf-8") as f:
+                                f.write(code)
+                            v_files.append(f"{mod_name}.v")
+                        
+                        # Try running natively, or via wsl if on windows
+                        cmd = ["verilator", "--lint-only", "-Wall"] + v_files
+                        try:
+                            res = subprocess.run(cmd, cwd=tmpdir, capture_output=True, text=True)
+                        except FileNotFoundError:
+                            # Fallback if python is on Windows but Verilator is in WSL
+                            cmd = ["wsl", "verilator", "--lint-only", "-Wall"] + v_files
+                            try:
+                                res = subprocess.run(cmd, cwd=tmpdir, capture_output=True, text=True)
+                            except Exception as e:
+                                res = subprocess.CompletedProcess(cmd, returncode=-1, stdout="", stderr=str(e))
+                        
+                        output = (res.stdout + "\n" + res.stderr).strip()
+                        if res.returncode == 0 and not output:
+                            st.success("✅ Verilator Strict Lint Passed! Zero warnings, zero errors.")
+                        elif res.returncode == 0:
+                            st.warning("⚠️ Passed with warnings:")
+                            st.code(output, language="bash")
+                        else:
+                            st.error("❌ Verilator Lint Failed:")
+                            st.code(output, language="bash")
 
             for mod_name, code in rtl.items():
                 with st.expander(f"📄 {mod_name}.v", expanded=(len(rtl) == 1)):
@@ -999,6 +1221,289 @@ with tab_agent:
 
     st.markdown('</div>', unsafe_allow_html=True)
     
+    st.markdown('<div class="phase-card">', unsafe_allow_html=True)
+    st.markdown('<div class="phase-header"><h2>Phase 4: Bring Silicon to Life (C++ Testbench)</h2></div>', unsafe_allow_html=True)
+    st.markdown("Your Verilog is isolated. Let's supply the heartbeat (clock) and external motherboard RAM (1MB) using a C++ Verilator Testbench.")
+    
+    if st.button("🚀 Build & Simulate CPU", use_container_width=True, type="primary"):
+        tb_code = """#include <iostream>
+#include <fstream>
+#include <iomanip>
+#include "Vtop.h"         
+#include "verilated.h"
+
+// 1MB Flat Memory Array
+#define MEM_SIZE 1024 * 1024 
+uint8_t main_memory[MEM_SIZE] = {0};
+
+uint32_t read_word(uint32_t addr) {
+    if (addr >= MEM_SIZE - 3) return 0;
+    return main_memory[addr] | (main_memory[addr+1] << 8) | 
+           (main_memory[addr+2] << 16) | (main_memory[addr+3] << 24);
+}
+
+void write_memory(uint32_t addr, uint32_t data, uint8_t wstrb) {
+    if (addr >= MEM_SIZE - 3) return;
+    if (wstrb & 0x1) main_memory[addr]   = data & 0xFF;
+    if (wstrb & 0x2) main_memory[addr+1] = (data >> 8) & 0xFF;
+    if (wstrb & 0x4) main_memory[addr+2] = (data >> 16) & 0xFF;
+    if (wstrb & 0x8) main_memory[addr+3] = (data >> 24) & 0xFF;
+}
+
+int main(int argc, char** argv) {
+    Verilated::commandArgs(argc, argv);
+    Vtop* top = new Vtop;
+
+    // --- LOAD FIRMWARE ---
+    // If a binary file is passed as argv[1], load it. Otherwise fall back to hardcoded boot program.
+    if (argc >= 2) {
+        std::ifstream file(argv[1], std::ios::binary);
+        if (!file) { std::cerr << "Error: Could not open " << argv[1] << std::endl; return 1; }
+        uint32_t addr = 0;
+        while (addr < MEM_SIZE && file.read(reinterpret_cast<char*>(&main_memory[addr]), 1)) addr++;
+        std::cout << "Loaded " << addr << " bytes from " << argv[1] << std::endl;
+    } else {
+        // Fallback: ADDI x1,x0,5 -> JAL x0,0 (infinite loop)
+        main_memory[0]=0x93; main_memory[1]=0x00; main_memory[2]=0x50; main_memory[3]=0x00;
+        main_memory[4]=0x6f; main_memory[5]=0x00; main_memory[6]=0x00; main_memory[7]=0x00;
+        std::cout << "Running built-in boot program." << std::endl;
+    }
+
+    top->clk = 0;
+    top->resetn = 0;
+    uint64_t ticks = 0;
+    const uint64_t MAX_TICKS = 200000; // 100k cycles max
+    int exit_code = 0;
+
+    std::cout << "Starting RISC-V Simulation..." << std::endl;
+
+    while (!Verilated::gotFinish() && ticks < MAX_TICKS) {
+        top->clk = !top->clk;
+        if (ticks > 4) top->resetn = 1;
+
+        top->eval();
+
+        top->imem_rdata = read_word(top->imem_addr);
+        if (top->dmem_read) top->dmem_rdata = read_word(top->dmem_addr);
+        else top->dmem_rdata = 0;
+
+        if (top->clk == 1 && top->dmem_write) {
+            write_memory(top->dmem_addr, top->dmem_wdata, top->dmem_wstrb);
+        }
+
+        top->eval();
+
+        // tohost trap (riscv-tests write 1 to tohost on pass, (test_num<<1)|1 on fail)
+        if (top->clk == 1 && top->dmem_write && top->dmem_addr == 0x80001000) {
+            uint32_t val = top->dmem_wdata;
+            if (val == 1) { std::cout << "TOHOST:PASS" << std::endl; exit_code = 0; }
+            else { std::cout << "TOHOST:FAIL:" << (val >> 1) << std::endl; exit_code = 1; }
+            break;
+        }
+
+        if (top->clk == 0 && top->resetn == 1 && argc < 2) {
+            // Only print cycle trace for the built-in boot program (not for gauntlet runs)
+            std::cout << "Cycle: " << (ticks/2)
+                      << " | PC: 0x" << std::setfill('0') << std::setw(8) << std::hex << top->imem_addr
+                      << " | Instr: 0x" << std::setw(8) << top->imem_rdata << std::endl;
+        }
+        ticks++;
+    }
+
+    if (ticks >= MAX_TICKS) std::cout << "TIMEOUT after " << (ticks/2) << " cycles." << std::endl;
+    std::cout << "Simulation Ended." << std::endl;
+    top->final();
+    delete top;
+    return exit_code;
+}
+"""
+        import subprocess
+        from pathlib import Path as _Path
+
+        # GNU Make cannot build in paths with spaces — use /tmp as a safe, space-free sandbox
+        sim_dir = _Path("/tmp/riscv_sim")
+        sim_dir.mkdir(parents=True, exist_ok=True)
+        sim_dir_str = str(sim_dir)  # "/tmp/riscv_sim" — guaranteed no spaces
+
+        with st.spinner("Writing files, compiling and simulating..."):
+            # Write all .v files
+            v_files = []
+            for mod_name, code in st.session_state.agent_rtl.items():
+                fpath = sim_dir / f"{mod_name}.v"
+                fpath.write_text(code, encoding="utf-8")
+                v_files.append(f"{mod_name}.v")
+
+            # Write testbench.cpp
+            (sim_dir / "testbench.cpp").write_text(tb_code, encoding="utf-8")
+
+            st.caption(f"📁 Working directory: `{sim_dir_str}`")
+
+            v_files_str = " ".join(v_files)
+            log_lines = []
+
+            def run_step(label, cmd):
+                r = subprocess.run(["bash", "-c", f"cd '{sim_dir_str}' && {cmd}"],
+                                   capture_output=True, text=True)
+                out = (r.stdout + r.stderr).strip()
+                log_lines.append(f"--- {label} ---\n{out}" if out else f"--- {label} --- (no output)")
+                return r.returncode, out
+
+            # Step 1: Verilate (no -Wall so lint warnings don't abort file generation)
+            code1, out1 = run_step(
+                "Step 1: Verilator → C++",
+                f"rm -rf obj_dir && verilator --Wno-fatal --top-module top --cc {v_files_str} --exe testbench.cpp"
+            )
+
+            if code1 != 0:
+                st.error("❌ Verilator Failed (check for syntax errors):")
+                st.code(out1, language="bash")
+            else:
+                # Step 2: Detect generated Makefile name
+                ls_res = subprocess.run(["bash", "-c", f"ls '{sim_dir_str}/obj_dir/'"],
+                                        capture_output=True, text=True)
+                obj_files = ls_res.stdout.strip()
+                st.caption(f"📂 `obj_dir/` contents: `{obj_files}`")
+
+                # Auto-detect: find any V*.mk in obj_dir (name depends on top module)
+                find_res = subprocess.run(
+                    ["bash", "-c", f"find '{sim_dir_str}/obj_dir' -maxdepth 1 -name 'V*.mk'"],
+                    capture_output=True, text=True
+                )
+                mk_candidates = find_res.stdout.strip().splitlines()
+                if mk_candidates:
+                    mk_name = mk_candidates[0].split("/")[-1]   # e.g. "Vtop.mk"
+                    target   = mk_name.replace(".mk", "")       # e.g. "Vtop"
+                    mk_flag  = f"-f {mk_name} {target}"
+                else:
+                    mk_flag = ""  # fallback: let make find its own Makefile
+
+                # Step 3: Compile
+                code2, out2 = run_step(
+                    "Step 2: g++ Compile",
+                    f"make -j -C obj_dir {mk_flag}"
+                )
+
+                if code2 != 0:
+                    st.error("❌ g++ Compilation Failed:")
+                    st.code(out2, language="bash")
+                else:
+                    st.success("✅ Compiled! Running simulation...")
+
+                    # Step 4: Simulate
+                    code3, out3 = run_step("Step 3: Simulation", "./obj_dir/Vtop")
+
+                    st.markdown("### 🖥️ RISC-V Terminal Output")
+                    if code3 == 0:
+                        st.success("✅ Simulation Complete!")
+                    else:
+                        st.error("❌ Runtime crash!")
+                    st.code(out3 or "(no output)", language="bash")
+
+            with st.expander("📋 Full Build Log"):
+                st.code("\n\n".join(log_lines), language="bash")
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # ═══════════════════════════════════════════════════════════════
+    # PHASE 5 — THE RISC-V GAUNTLET
+    # ═══════════════════════════════════════════════════════════════
+    st.markdown('<div class="phase-card">', unsafe_allow_html=True)
+    st.markdown('<div class="phase-header"><h2>🏆 Phase 5: The RISC-V Gauntlet (riscv-tests)</h2></div>', unsafe_allow_html=True)
+    st.markdown("Run the **official RISC-V Foundation test suite** against your CPU. Each test targets one instruction class (ADD, BEQ, LW, etc.).")
+
+    import subprocess as _sp
+    from pathlib import Path as _P5
+
+    tests_bin_dir = _P5("/tmp/riscv-tests-bin")
+    vtop_bin     = _P5("/tmp/riscv_sim/obj_dir/Vtop")
+
+    col_setup, col_status = st.columns([1, 2])
+    with col_setup:
+        if st.button("📥 Setup riscv-tests", use_container_width=True):
+            with st.spinner("Installing toolchain and compiling tests (~3 min first time)..."):
+                setup_script = """
+                set -e
+                # 1. Install RISC-V toolchain if not present
+                if ! command -v riscv64-unknown-elf-gcc &>/dev/null; then
+                    sudo apt-get install -y -q gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf
+                fi
+                # 2. Clone riscv-tests if not present
+                if [ ! -d /tmp/riscv-tests ]; then
+                    git clone --depth=1 https://github.com/riscv-software-src/riscv-tests /tmp/riscv-tests
+                fi
+                # 3. Build
+                cd /tmp/riscv-tests
+                if [ ! -f configure ]; then autoconf; fi
+                if [ ! -f Makefile ]; then ./configure --prefix=/tmp/riscv-tests-install; fi
+                make -j4 isa 2>&1 | tail -20
+                # 4. Extract and convert ELF -> flat binary for rv32ui physical tests
+                mkdir -p /tmp/riscv-tests-bin
+                for elf in /tmp/riscv-tests/isa/rv32ui-p-*; do
+                    base=$(basename $elf)
+                    # Skip .dump files
+                    [[ "$base" == *.* ]] && continue
+                    riscv64-unknown-elf-objcopy -O binary "$elf" "/tmp/riscv-tests-bin/${base}.bin"
+                done
+                echo "DONE: $(ls /tmp/riscv-tests-bin/*.bin | wc -l) test binaries ready."
+                """
+                res = _sp.run(["bash", "-c", setup_script], capture_output=True, text=True)
+                out = (res.stdout + res.stderr).strip()
+                if res.returncode == 0:
+                    st.success("✅ riscv-tests ready!")
+                else:
+                    st.error("❌ Setup failed:")
+                st.code(out[-3000:], language="bash")  # last 3000 chars
+
+    with col_status:
+        bins = sorted(tests_bin_dir.glob("*.bin")) if tests_bin_dir.exists() else []
+        if bins:
+            st.success(f"✅ {len(bins)} test binaries found in `/tmp/riscv-tests-bin/`")
+        else:
+            st.info("ℹ️ Click **Setup riscv-tests** first to download and compile the test suite.")
+
+    st.divider()
+
+    if not vtop_bin.exists():
+        st.warning("⚠️ CPU binary not found at `/tmp/riscv_sim/obj_dir/Vtop`. Run Phase 4 Build first!")
+    elif bins:
+        if st.button("⚔️ Run Full Gauntlet", use_container_width=True, type="primary"):
+            results = []
+            progress = st.progress(0, text="Running tests...")
+            result_placeholder = st.empty()
+
+            for i, bin_path in enumerate(bins):
+                test_name = bin_path.stem  # e.g. rv32ui-p-add
+                res = _sp.run(
+                    [str(vtop_bin), str(bin_path)],
+                    capture_output=True, text=True, timeout=30
+                )
+                output = (res.stdout + res.stderr)
+                if "TOHOST:PASS" in output:
+                    status = "✅ PASS"
+                elif "TOHOST:FAIL" in output:
+                    fail_code = output.split("TOHOST:FAIL:")[-1].split("\n")[0].strip()
+                    status = f"❌ FAIL (test #{fail_code})"
+                elif "TIMEOUT" in output:
+                    status = "⏱️ TIMEOUT"
+                else:
+                    status = f"❓ UNKNOWN (rc={res.returncode})"
+
+                results.append({"Test": test_name, "Result": status})
+                progress.progress((i + 1) / len(bins), text=f"{test_name}: {status}")
+
+            progress.progress(1.0, text="Gauntlet complete!")
+            import pandas as pd
+            df = pd.DataFrame(results)
+            passed = (df["Result"].str.startswith("✅")).sum()
+            failed = len(df) - passed
+            st.markdown(f"### Score: **{passed}/{len(df)}** tests passed")
+            if failed == 0:
+                st.success("🏆 PERFECT SCORE! Your core is RV32I compliant!")
+            else:
+                st.warning(f"⚠️ {failed} test(s) failed — review the table below.")
+            st.dataframe(df, use_container_width=True, height=600)
+
+    st.markdown('</div>', unsafe_allow_html=True)
     st.divider()
     # ── Master Save Button ───────────────────────────────────────────────────
     plan_done = st.session_state.agent_plan is not None
