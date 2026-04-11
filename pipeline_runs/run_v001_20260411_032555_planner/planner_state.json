@@ -1,0 +1,178 @@
+{
+  "architecture": "pipelined",
+  "reason": "The user explicitly described a 5\u2011stage in\u2011order pipeline (Fetch \u2192 Decode \u2192 Execute \u2192 Memory \u2192 Writeback).",
+  "assumptions": [
+    "No caches, branch prediction, or privilege modes are required.",
+    "Memory interface is a simple synchronous 32\u2011bit bus.",
+    "PC increments by 4 on each instruction fetch.",
+    "x0 is hardwired to zero.",
+    "Immediate generation follows the standard RV32I encoding.",
+    "Load/store unit performs sign/zero extension as needed.",
+    "Control hazard is handled by a simple flush on taken branches.",
+    "No data\u2011hazard detection or forwarding is implemented."
+  ],
+  "missing_spec": [],
+  "instruction_groups": [
+    {
+      "group": "R-Type ALU",
+      "instructions": [
+        "ADD",
+        "SUB",
+        "AND",
+        "OR",
+        "XOR",
+        "SLT",
+        "SLTU",
+        "SLL",
+        "SRL",
+        "SRA"
+      ],
+      "priority": 1
+    },
+    {
+      "group": "I-Type ALU",
+      "instructions": [
+        "ADDI",
+        "ANDI",
+        "ORI",
+        "XORI",
+        "SLTI",
+        "SLTIU",
+        "SLLI",
+        "SRLI",
+        "SRAI"
+      ],
+      "priority": 2
+    },
+    {
+      "group": "U-Type",
+      "instructions": [
+        "LUI",
+        "AUIPC"
+      ],
+      "priority": 3
+    },
+    {
+      "group": "Branches",
+      "instructions": [
+        "BEQ",
+        "BNE",
+        "BLT",
+        "BGE",
+        "BLTU",
+        "BGEU"
+      ],
+      "priority": 4
+    },
+    {
+      "group": "Loads",
+      "instructions": [
+        "LB",
+        "LH",
+        "LW",
+        "LBU",
+        "LHU"
+      ],
+      "priority": 5
+    },
+    {
+      "group": "Stores",
+      "instructions": [
+        "SB",
+        "SH",
+        "SW"
+      ],
+      "priority": 6
+    },
+    {
+      "group": "Jumps",
+      "instructions": [
+        "JAL",
+        "JALR"
+      ],
+      "priority": 7
+    }
+  ],
+  "modules": [
+    {
+      "name": "regfile",
+      "depends_on": []
+    },
+    {
+      "name": "imm_gen",
+      "depends_on": []
+    },
+    {
+      "name": "alu",
+      "depends_on": []
+    },
+    {
+      "name": "branch_unit",
+      "depends_on": [
+        "alu"
+      ]
+    },
+    {
+      "name": "load_store",
+      "depends_on": []
+    },
+    {
+      "name": "control",
+      "depends_on": []
+    },
+    {
+      "name": "pc_next",
+      "depends_on": [
+        "branch_unit"
+      ]
+    },
+    {
+      "name": "top",
+      "depends_on": [
+        "regfile",
+        "imm_gen",
+        "alu",
+        "branch_unit",
+        "load_store",
+        "control",
+        "pc_next"
+      ]
+    }
+  ],
+  "milestones": [
+    {
+      "phase": 1,
+      "goal": "Register file + ALU + R-type only passes rv32ui-p-add",
+      "modules": [
+        "regfile",
+        "alu",
+        "control",
+        "top"
+      ]
+    },
+    {
+      "phase": 2,
+      "goal": "I-type + U-type + Shifts pass all rv32ui-p-addi, lui, auipc",
+      "modules": [
+        "imm_gen"
+      ]
+    },
+    {
+      "phase": 3,
+      "goal": "Branches + Jumps pass rv32ui-p-beq..bne..jal..jalr",
+      "modules": [
+        "branch_unit",
+        "pc_next"
+      ]
+    },
+    {
+      "phase": 4,
+      "goal": "Loads + Stores pass all rv32ui-p-lb..sw",
+      "modules": [
+        "load_store"
+      ]
+    }
+  ],
+  "tohost_address": "0x80001000",
+  "reset_pc": "0x00000000"
+}

@@ -1,0 +1,6 @@
+[server]
+fileWatcherType = "poll"   # avoids tracing all imported module __paths__
+runOnSave = true
+
+[logger]
+level = "error"            # suppress torchvision/transformers watcher noise
