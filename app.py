@@ -446,6 +446,7 @@ MANDATORY OUTPUT — valid JSON only, no prose:
     "Strictly single-cycle architecture. NO pipeline registers. NO IF/ID, ID/EX, EX/MEM stage latches.",
     "No hazard detection unit, no forwarding multiplexers — not needed in single-cycle.",
     "Simple synchronous memory interface with byte-enable for loads/stores.",
+    "The load_store module is a purely combinational masking unit that acts as an interface to external memory. It MUST NOT have a clock (clk) input.",
     "x0 hardwired to zero. No compressed instructions, no FP, no privileged mode."
   ],
   "missing_spec": ["list of things the user should clarify, empty if none"],
@@ -564,7 +565,9 @@ ADDITIONAL RULES:
 3. Branches: ALU_op=ADD (unused), branch_type="eq"|"ne"|"lt"|"ge"|"ltu"|"geu". branch_unit uses branch_type directly.
 4. JALR: jump_type="jalr" — pc_next module MUST apply & ~1 to the computed target.
 5. JAL: jump_type="jal" — no LSB clear needed.
-6. mem_size: LB/SB=8, LH/SH=16, LW/SW=32. mem_extend: LB/LH=signed, LBU/LHU=unsigned, stores=N/A.
+6. mem_size: LB/SB=2'b00, LH/SH=2'b01, LW/SW=2'b10 (matches funct3[1:0]).
+   mem_extend comes from funct3[2]: 0=signed (LB/LH), 1=unsigned (LBU/LHU). Stores do not use mem_extend.
+   CRITICAL: mem_extend=0 → sign-extend; mem_extend=1 → zero-extend. This matches the RISC-V funct3 encoding.
 7. All R-type instructions share opcode 0110011 — correct; funct3/funct7 differentiate them.
 """
 
@@ -590,10 +593,20 @@ PER-MODULE PORT CONTRACTS (use EXACTLY these port names for interconnect):
   imm_gen    : instr[31:0], imm_type[2:0] → imm[31:0]
   alu        : a[31:0], b[31:0], alu_op[3:0] → result[31:0], zero
   branch_unit: branch_type[2:0], rs1[31:0], rs2[31:0] → taken
-               (branch_type encodes: 0=eq,1=ne,2=lt,3=ge,4=ltu,5=geu from ISA table)
+               CRITICAL: branch_type IS the raw RISC-V funct3 field. Use the EXACT binary codes:
+                 3'b000=BEQ, 3'b001=BNE, 3'b100=BLT, 3'b101=BGE, 3'b110=BLTU, 3'b111=BGEU
+               DO NOT use sequential integers (0,1,2,3,4,5) — that is an ISA violation.
                (DO NOT use ALU output — this is a dedicated parallel comparator)
   load_store : mem_read, mem_write, mem_size[1:0], mem_extend, addr[31:0], wdata[31:0], mem_rdata[31:0] 
                → rdata[31:0], mem_addr[31:0], mem_wdata[31:0], mem_wstrb[3:0]
+               CRITICAL mem_extend polarity: mem_extend comes from funct3[2].
+                 funct3[2]=0 (LB/LH) → mem_extend=0 → SIGN extend.
+                 funct3[2]=1 (LBU/LHU) → mem_extend=1 → ZERO extend.
+               So: `if (!mem_extend)` triggers sign-extension; `else` triggers zero-extension.
+               CRITICAL mem_addr: The external memory bus is WORD-addressed with byte strobes.
+                 Always output word-aligned address: `mem_addr = {addr[31:2], 2'b00}`
+                 The byte_offset (addr[1:0]) is encoded in mem_wstrb lane selection only.
+               CRITICAL: This module is purely combinational mask generation. DO NOT declare or instantiate with a clk port.
   control    : opcode[6:0], funct3[2:0], funct7b5 → 
                alu_src_a[1:0], alu_src_b, result_src[1:0], 
                reg_write, mem_read, mem_write, mem_size[1:0], mem_extend, 
@@ -771,6 +784,49 @@ def validate_and_repair_verilog(
 
 
 
+def strip_unused_signals(code: str) -> tuple[str, list[str]]:
+    """Remove unused logic/wire/reg declarations from generated Verilog.
+
+    Strategy: a declared net is 'unused' if the only line containing its
+    identifier is the declaration itself.  We check whole-word occurrences
+    on every non-comment line, so false-positives (sub-strings) are avoided.
+    Returns (cleaned_code, list_of_removed_names).
+    """
+    lines = code.split('\n')
+    # Match:  logic [w] name;  /  logic name;  /  wire [...] name;  /  reg [...] name;
+    DECL_RE = re.compile(
+        r'^\s*(?:logic|wire|reg)(?:\s+(?:signed|unsigned))?'
+        r'(?:\s*\[[^\]]*\])?\s+(\w+)\s*;'
+    )
+
+    # Strip // comments for occurrence counting
+    def no_comment(line: str) -> str:
+        return re.sub(r'//.*', '', line)
+
+    declared: dict[str, int] = {}   # signal_name -> line index
+    for i, line in enumerate(lines):
+        m = DECL_RE.match(line)
+        if m:
+            declared[m.group(1)] = i
+
+    removed: list[str] = []
+    unused_line_idxs: set[int] = set()
+
+    for sig, decl_idx in declared.items():
+        pattern = re.compile(r'\b' + re.escape(sig) + r'\b')
+        refs = [
+            i for i, line in enumerate(lines)
+            if pattern.search(no_comment(line))
+        ]
+        if refs == [decl_idx]:       # only appears on its own declaration line
+            unused_line_idxs.add(decl_idx)
+            removed.append(sig)
+
+    cleaned = '\n'.join(line for i, line in enumerate(lines)
+                        if i not in unused_line_idxs)
+    return cleaned, removed
+
+
 def parse_json_safe(text: str):
     """Extract and parse the first JSON object or array from text."""
     text = text.strip()
@@ -871,6 +927,53 @@ with tab_agent:
   <span style="color:{'#c4b5fd' if isa_done and not rtl_done else ('#22c55e' if rtl_done else '#475569')};font-weight:600;">RTL Generator</span>
 </div>
 """, unsafe_allow_html=True)
+
+    # ── Restore from Disk (shown when session state is empty after a reload) ───
+    session_empty = (st.session_state.agent_plan is None and
+                     st.session_state.agent_isa  is None and
+                     not st.session_state.agent_rtl)
+
+    _run_dirs = sorted([d for d in (PROJECT_ROOT / "pipeline_runs").glob("run_v*")
+                        if (d / "rtl").exists() or (d / "plan.json").exists()])
+    if _run_dirs:
+        _last_run = _run_dirs[-1]
+        if session_empty:
+            st.info(f"💾 **Session cleared.** Last saved pipeline: `{_last_run.name}` — restore it without hitting the API:")
+        with st.expander("🔄 Restore Last Pipeline from Disk", expanded=session_empty):
+            st.caption(f"Source: `{_last_run}`")
+            _cr1, _cr2, _cr3 = st.columns(3)
+            with _cr1:
+                if st.button("📋 Restore Plan", use_container_width=True, key="restore_plan"):
+                    import json as _j
+                    _f = _last_run / "plan.json"
+                    if _f.exists():
+                        st.session_state.agent_plan = _j.loads(_f.read_text()); st.rerun()
+                    else: st.error("No plan.json found.")
+            with _cr2:
+                if st.button("📊 Restore ISA", use_container_width=True, key="restore_isa"):
+                    import json as _j
+                    _f = _last_run / "isa.json"
+                    if _f.exists():
+                        st.session_state.agent_isa = _j.loads(_f.read_text()); st.rerun()
+                    else: st.error("No isa.json found.")
+            with _cr3:
+                if st.button("⚙️ Restore RTL", use_container_width=True, key="restore_rtl"):
+                    _d = _last_run / "rtl"
+                    if _d.exists():
+                        st.session_state.agent_rtl = {v.stem: v.read_text(encoding="utf-8") for v in _d.glob("*.v")}
+                        st.success(f"Restored {len(st.session_state.agent_rtl)} modules!"); st.rerun()
+                    else: st.error("No rtl/ folder found.")
+            st.markdown("---")
+            if st.button("⚡ Restore ALL (Plan + ISA + RTL) — Zero tokens!", use_container_width=True, type="primary", key="restore_all"):
+                import json as _j
+                if (_last_run / "plan.json").exists():
+                    st.session_state.agent_plan = _j.loads((_last_run / "plan.json").read_text())
+                if (_last_run / "isa.json").exists():
+                    st.session_state.agent_isa  = _j.loads((_last_run / "isa.json").read_text())
+                _rtl_d = _last_run / "rtl"
+                if _rtl_d.exists():
+                    st.session_state.agent_rtl = {v.stem: v.read_text(encoding="utf-8") for v in _rtl_d.glob("*.v")}
+                st.success(f"✅ Full pipeline restored from `{_last_run.name}`. Zero API tokens used!"); st.rerun()
 
     # ─────────────────────────────────────────────────────────────────────────
     # PHASE 1 — PLANNER
@@ -1168,6 +1271,10 @@ with tab_agent:
                         clean_code = re.sub(r'^```[a-zA-Z]*\n', '', code, flags=re.MULTILINE)
                         clean_code = re.sub(r'\n```$', '', clean_code)
                         clean_code = clean_code.strip()
+                        # Remove unused signal declarations before linting
+                        clean_code, removed = strip_unused_signals(clean_code)
+                        if removed:
+                            clean_code = f"// [Auto-cleaned] Removed unused: {', '.join(removed)}\n" + clean_code
                         cleaned_params[mod_name] = clean_code
                     st.session_state.agent_rtl = cleaned_params
                     saved_clean = save_pipeline_snapshot("cleaned")
@@ -1185,13 +1292,15 @@ with tab_agent:
                                 f.write(code)
                             v_files.append(f"{mod_name}.v")
                         
-                        # Try running natively, or via wsl if on windows
-                        cmd = ["verilator", "--lint-only", "-Wall"] + v_files
+                        # -Wall catches real errors; --Wno-UNUSED silences stylistic 'not used' warnings
+                        # (dead declarations are already stripped by strip_unused_signals();
+                        #  partial-port-bit usage like instr[6:0] can't be removed without altering the port)
+                        cmd = ["verilator", "--lint-only", "-Wall", "--Wno-UNUSED"] + v_files
                         try:
                             res = subprocess.run(cmd, cwd=tmpdir, capture_output=True, text=True)
                         except FileNotFoundError:
                             # Fallback if python is on Windows but Verilator is in WSL
-                            cmd = ["wsl", "verilator", "--lint-only", "-Wall"] + v_files
+                            cmd = ["wsl", "verilator", "--lint-only", "-Wall", "--Wno-UNUSED"] + v_files
                             try:
                                 res = subprocess.run(cmd, cwd=tmpdir, capture_output=True, text=True)
                             except Exception as e:
@@ -1225,7 +1334,20 @@ with tab_agent:
     st.markdown('<div class="phase-header"><h2>Phase 4: Bring Silicon to Life (C++ Testbench)</h2></div>', unsafe_allow_html=True)
     st.markdown("Your Verilog is isolated. Let's supply the heartbeat (clock) and external motherboard RAM (1MB) using a C++ Verilator Testbench.")
     
-    if st.button("🚀 Build & Simulate CPU", use_container_width=True, type="primary"):
+    vtop_exists = __import__('pathlib').Path("/tmp/riscv_sim/obj_dir/Vtop").exists()
+    if vtop_exists:
+        st.success("✅ Cached CPU binary found at `/tmp/riscv_sim/obj_dir/Vtop`. You can run the simulation directly.")
+
+    col_build, col_run = st.columns([1, 1])
+    with col_build:
+        force_rebuild = st.checkbox("🔨 Force Full Rebuild (slow, ~60s)", value=not vtop_exists)
+        do_build = st.button("🚀 Build & Simulate CPU", use_container_width=True, type="primary")
+    with col_run:
+        st.caption("Skip rebuild, run cached binary instantly:")
+        run_only = st.button("▶️ Run Simulation Only", use_container_width=True,
+                             disabled=not vtop_exists)
+
+    if do_build or run_only:
         tb_code = """#include <iostream>
 #include <fstream>
 #include <iomanip>
@@ -1293,21 +1415,30 @@ int main(int argc, char** argv) {
 
         top->eval();
 
-        // tohost trap (riscv-tests write 1 to tohost on pass, (test_num<<1)|1 on fail)
-        if (top->clk == 1 && top->dmem_write && top->dmem_addr == 0x80001000) {
+        // tohost trap: our custom linker script places tohost at 0x00001000
+        // riscv-tests write 1 on PASS, (test_id<<1)|1 on FAIL
+        if (top->clk == 1 && top->dmem_write && top->dmem_addr == 0x00001000) {
             uint32_t val = top->dmem_wdata;
             if (val == 1) { std::cout << "TOHOST:PASS" << std::endl; exit_code = 0; }
             else { std::cout << "TOHOST:FAIL:" << (val >> 1) << std::endl; exit_code = 1; }
             break;
         }
 
-        if (top->clk == 0 && top->resetn == 1 && argc < 2) {
-            // Only print cycle trace for the built-in boot program (not for gauntlet runs)
-            std::cout << "Cycle: " << (ticks/2)
-                      << " | PC: 0x" << std::setfill('0') << std::setw(8) << std::hex << top->imem_addr
-                      << " | Instr: 0x" << std::setw(8) << top->imem_rdata << std::endl;
-        }
-        ticks++;
+            // Only print first 15 cycles to avoid flooding stdout with infinite loop output
+            static int print_limit = 0;
+            if (top->clk == 0 && top->resetn == 1 && argc < 2 && print_limit < 15) {
+                std::cout << "Cycle: " << std::dec << (ticks/2)
+                          << " | PC: 0x" << std::setfill('0') << std::setw(8) << std::hex << top->imem_addr
+                          << " | Instr: 0x" << std::setw(8) << top->imem_rdata << std::endl;
+                print_limit++;
+                if (print_limit == 15) {
+                    std::cout << std::dec << "... (trace limit reached, CPU is running. Will stop at cycle 1000)" << std::endl;
+                }
+            }
+            // For boot program (no file), cap at 1000 cycles — enough to see behaviour
+            if (argc < 2 && ticks > 2000) break;
+
+        ticks++; // IMPORTANT: advance clock!
     }
 
     if (ticks >= MAX_TICKS) std::cout << "TIMEOUT after " << (ticks/2) << " cycles." << std::endl;
@@ -1338,6 +1469,10 @@ int main(int argc, char** argv) {
 
             st.caption(f"📁 Working directory: `{sim_dir_str}`")
 
+            skip_compile = run_only or (not force_rebuild and vtop_exists)
+
+            if skip_compile:
+                st.info("⚡ Skipping Verilator + g++ (using cached binary). Check 'Force Full Rebuild' to recompile.")
             v_files_str = " ".join(v_files)
             log_lines = []
 
@@ -1348,56 +1483,59 @@ int main(int argc, char** argv) {
                 log_lines.append(f"--- {label} ---\n{out}" if out else f"--- {label} --- (no output)")
                 return r.returncode, out
 
-            # Step 1: Verilate (no -Wall so lint warnings don't abort file generation)
-            code1, out1 = run_step(
-                "Step 1: Verilator → C++",
-                f"rm -rf obj_dir && verilator --Wno-fatal --top-module top --cc {v_files_str} --exe testbench.cpp"
-            )
+            sim_ready = False  # Will be set to True once we know the binary exists
 
-            if code1 != 0:
-                st.error("❌ Verilator Failed (check for syntax errors):")
-                st.code(out1, language="bash")
-            else:
-                # Step 2: Detect generated Makefile name
-                ls_res = subprocess.run(["bash", "-c", f"ls '{sim_dir_str}/obj_dir/'"],
-                                        capture_output=True, text=True)
-                obj_files = ls_res.stdout.strip()
-                st.caption(f"📂 `obj_dir/` contents: `{obj_files}`")
-
-                # Auto-detect: find any V*.mk in obj_dir (name depends on top module)
-                find_res = subprocess.run(
-                    ["bash", "-c", f"find '{sim_dir_str}/obj_dir' -maxdepth 1 -name 'V*.mk'"],
-                    capture_output=True, text=True
+            if not skip_compile:
+                # Step 1: Verilate
+                code1, out1 = run_step(
+                    "Step 1: Verilator → C++",
+                    f"rm -rf obj_dir && verilator --Wno-fatal --top-module top --cc {v_files_str} --exe testbench.cpp"
                 )
-                mk_candidates = find_res.stdout.strip().splitlines()
-                if mk_candidates:
-                    mk_name = mk_candidates[0].split("/")[-1]   # e.g. "Vtop.mk"
-                    target   = mk_name.replace(".mk", "")       # e.g. "Vtop"
-                    mk_flag  = f"-f {mk_name} {target}"
+                if code1 != 0:
+                    st.error("❌ Verilator Failed:")
+                    st.code(out1, language="bash")
                 else:
-                    mk_flag = ""  # fallback: let make find its own Makefile
-
-                # Step 3: Compile
-                code2, out2 = run_step(
-                    "Step 2: g++ Compile",
-                    f"make -j -C obj_dir {mk_flag}"
-                )
-
-                if code2 != 0:
-                    st.error("❌ g++ Compilation Failed:")
-                    st.code(out2, language="bash")
-                else:
-                    st.success("✅ Compiled! Running simulation...")
-
-                    # Step 4: Simulate
-                    code3, out3 = run_step("Step 3: Simulation", "./obj_dir/Vtop")
-
-                    st.markdown("### 🖥️ RISC-V Terminal Output")
-                    if code3 == 0:
-                        st.success("✅ Simulation Complete!")
+                    # Auto-detect Makefile
+                    find_res = subprocess.run(
+                        ["bash", "-c", f"find '{sim_dir_str}/obj_dir' -maxdepth 1 -name 'V*.mk'"],
+                        capture_output=True, text=True
+                    )
+                    mk_candidates = find_res.stdout.strip().splitlines()
+                    if mk_candidates:
+                        mk_name = mk_candidates[0].split("/")[-1]
+                        target  = mk_name.replace(".mk", "")
+                        mk_flag = f"-f {mk_name} {target}"
                     else:
-                        st.error("❌ Runtime crash!")
-                    st.code(out3 or "(no output)", language="bash")
+                        mk_flag = ""
+
+                    # Step 2: Compile
+                    code2, out2 = run_step("Step 2: g++ Compile", f"make -j -C obj_dir {mk_flag}")
+                    if code2 != 0:
+                        st.error("❌ g++ Compilation Failed:")
+                        st.code(out2, language="bash")
+                    else:
+                        st.success("✅ Compiled successfully!")
+                        sim_ready = True
+            else:
+                sim_ready = True  # Binary already exists, skip build entirely
+
+            if sim_ready:
+                st.markdown("### 🖥️ RISC-V Terminal Output")
+                out_placeholder = st.empty()
+                out_lines = []
+                # Use Popen so readline() yields control between lines (no full blocking)
+                sim_proc = subprocess.Popen(
+                    ["bash", "-c", f"cd '{sim_dir_str}' && ./obj_dir/Vtop"],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+                )
+                for line in iter(sim_proc.stdout.readline, ""):
+                    out_lines.append(line.rstrip())
+                    out_placeholder.code("\n".join(out_lines[-30:]), language="bash")
+                sim_proc.wait()
+                if sim_proc.returncode == 0:
+                    st.success("✅ Simulation Complete!")
+                else:
+                    st.error("❌ Runtime crash!")
 
             with st.expander("📋 Full Build Log"):
                 st.code("\n\n".join(log_lines), language="bash")
@@ -1421,31 +1559,83 @@ int main(int argc, char** argv) {
     with col_setup:
         if st.button("📥 Setup riscv-tests", use_container_width=True):
             with st.spinner("Installing toolchain and compiling tests (~3 min first time)..."):
-                setup_script = """
-                set -e
-                # 1. Install RISC-V toolchain if not present
-                if ! command -v riscv64-unknown-elf-gcc &>/dev/null; then
-                    sudo apt-get install -y -q gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf
-                fi
-                # 2. Clone riscv-tests if not present
-                if [ ! -d /tmp/riscv-tests ]; then
-                    git clone --depth=1 https://github.com/riscv-software-src/riscv-tests /tmp/riscv-tests
-                fi
-                # 3. Build
-                cd /tmp/riscv-tests
-                if [ ! -f configure ]; then autoconf; fi
-                if [ ! -f Makefile ]; then ./configure --prefix=/tmp/riscv-tests-install; fi
-                make -j4 isa 2>&1 | tail -20
-                # 4. Extract and convert ELF -> flat binary for rv32ui physical tests
-                mkdir -p /tmp/riscv-tests-bin
-                for elf in /tmp/riscv-tests/isa/rv32ui-p-*; do
-                    base=$(basename $elf)
-                    # Skip .dump files
-                    [[ "$base" == *.* ]] && continue
-                    riscv64-unknown-elf-objcopy -O binary "$elf" "/tmp/riscv-tests-bin/${base}.bin"
-                done
-                echo "DONE: $(ls /tmp/riscv-tests-bin/*.bin | wc -l) test binaries ready."
-                """
+                setup_script = r"""
+#!/bin/bash
+set -e
+
+# 1. Install toolchain
+if ! command -v riscv64-unknown-elf-gcc &>/dev/null; then
+    sudo apt-get install -y -q gcc-riscv64-unknown-elf binutils-riscv64-unknown-elf
+fi
+
+# 2. Clone repo + pull env/ submodule (env/ contains riscv_test.h)
+if [ ! -f /tmp/riscv-tests/env/p/riscv_test.h ]; then
+    # Clone main repo if not present
+    if [ ! -d /tmp/riscv-tests/.git ]; then
+        rm -rf /tmp/riscv-tests
+        git clone --depth=1 https://github.com/riscv-software-src/riscv-tests /tmp/riscv-tests
+    fi
+    # Pull the env/ submodule (contains riscv_test.h and link.ld)
+    cd /tmp/riscv-tests && git submodule update --init --depth=1
+fi
+
+ENV_DIR=/tmp/riscv-tests/env/p
+ISA_DIR=/tmp/riscv-tests/isa/rv32ui
+MACRO_DIR=/tmp/riscv-tests/isa/macros/scalar
+OUT_DIR=/tmp/riscv-tests-bin
+mkdir -p $OUT_DIR
+
+# 3. Write a CUSTOM linker script placing code at 0x00000000 and tohost at 0x00001000
+# This matches our testbench CPU which resets to PC=0x0 and has 1MB RAM
+cat > /tmp/riscv-link.ld << 'LDEOF'
+OUTPUT_ARCH( "riscv" )
+ENTRY( _start )
+SECTIONS {
+  . = 0x00000000;
+  .text.init : { *(.text.init) }
+  . = ALIGN(0x100);
+  .text : { *(.text) }
+  . = 0x00001000;
+  .tohost : { *(.tohost) }
+  . = ALIGN(0x1000);
+  .data : { *(.data) }
+  .bss : { *(.bss) }
+  _end = .;
+}
+LDEOF
+
+# 3.5. CRITICAL PATCH: riscv_test.h uses 'ecall' for RVTEST_PASS which requires
+#      machine-mode exception support. Our bare-metal CPU has no CSR/trap support.
+#      Patch RVTEST_PASS to jump directly to write_tohost instead.
+echo "Patching riscv_test.h to bypass ecall (bare-metal CPU has no exception support)..."
+# Replace ecall inside RVTEST_PASS definition with j write_tohost
+sed -i '/^#define RVTEST_PASS/,/ecall/{s/ecall/j write_tohost/}' ${ENV_DIR}/riscv_test.h
+# Replace j fail_tohost with j write_tohost (write_tohost uses TESTNUM/gp value)
+sed -i 's/j fail_tohost/j write_tohost/' ${ENV_DIR}/riscv_test.h
+echo "Patch applied."
+
+# 4. Compile each rv32ui test directly (bypass broken autoconf/configure)
+PASS=0; FAIL=0
+for src in $ISA_DIR/*.S; do
+    base=$(basename "$src" .S)
+    test_name="rv32ui-p-${base}"
+    elf="/tmp/riscv-tests/${test_name}"
+    bin="${OUT_DIR}/${test_name}.bin"
+    
+    riscv64-unknown-elf-gcc \
+        -march=rv32im -mabi=ilp32 \
+        -static -nostdlib -nostartfiles \
+        -T/tmp/riscv-link.ld \
+        -I${ENV_DIR} -I${MACRO_DIR} \
+        "$src" -o "$elf" 2>/dev/null && \
+    riscv64-unknown-elf-objcopy -O binary "$elf" "$bin" && \
+    echo "✓ ${test_name}" && PASS=$((PASS+1)) || \
+    (echo "✗ ${test_name} SKIPPED" && FAIL=$((FAIL+1)))
+done
+
+echo ""
+echo "DONE: ${PASS} compiled, ${FAIL} skipped -> $(ls ${OUT_DIR}/*.bin 2>/dev/null | wc -l) binaries in ${OUT_DIR}"
+"""
                 res = _sp.run(["bash", "-c", setup_script], capture_output=True, text=True)
                 out = (res.stdout + res.stderr).strip()
                 if res.returncode == 0:
@@ -1468,32 +1658,54 @@ int main(int argc, char** argv) {
     elif bins:
         if st.button("⚔️ Run Full Gauntlet", use_container_width=True, type="primary"):
             results = []
-            progress = st.progress(0, text="Running tests...")
-            result_placeholder = st.empty()
+            progress   = st.progress(0, text="Starting gauntlet...")
+            live_table = st.empty()
 
-            for i, bin_path in enumerate(bins):
-                test_name = bin_path.stem  # e.g. rv32ui-p-add
-                res = _sp.run(
-                    [str(vtop_bin), str(bin_path)],
-                    capture_output=True, text=True, timeout=30
-                )
-                output = (res.stdout + res.stderr)
-                if "TOHOST:PASS" in output:
-                    status = "✅ PASS"
-                elif "TOHOST:FAIL" in output:
-                    fail_code = output.split("TOHOST:FAIL:")[-1].split("\n")[0].strip()
-                    status = f"❌ FAIL (test #{fail_code})"
-                elif "TIMEOUT" in output:
-                    status = "⏱️ TIMEOUT"
-                else:
-                    status = f"❓ UNKNOWN (rc={res.returncode})"
+            # Build a single bash script that runs every test and emits one result
+            # line per test → Popen + readline() streams results live, no blocking
+            bin_paths_str = " ".join(f'"{str(b)}"' for b in bins)
+            gauntlet_sh = f"""
+#!/bin/bash
+VTOP="{str(vtop_bin)}"
+for bin in {bin_paths_str}; do
+    name=$(basename "$bin" .bin)
+    out=$("$VTOP" "$bin" 2>&1)
+    if echo "$out" | grep -q "TOHOST:PASS"; then
+        echo "PASS:$name"
+    elif echo "$out" | grep -q "TOHOST:FAIL:"; then
+        code=$(echo "$out" | grep -o "TOHOST:FAIL:[0-9]*" | cut -d: -f3)
+        echo "FAIL:$name:$code"
+    elif echo "$out" | grep -q "TIMEOUT"; then
+        echo "TIMEOUT:$name"
+    else
+        echo "UNKNOWN:$name"
+    fi
+done
+echo "DONE"
+"""
+            proc = _sp.Popen(["bash", "-c", gauntlet_sh],
+                             stdout=_sp.PIPE, stderr=_sp.STDOUT, text=True)
 
-                results.append({"Test": test_name, "Result": status})
-                progress.progress((i + 1) / len(bins), text=f"{test_name}: {status}")
-
-            progress.progress(1.0, text="Gauntlet complete!")
             import pandas as pd
-            df = pd.DataFrame(results)
+            for line in iter(proc.stdout.readline, ""):
+                line = line.strip()
+                if not line or line == "DONE":
+                    break
+                parts = line.split(":", 2)
+                verdict, name = parts[0], parts[1] if len(parts) > 1 else "?"
+                fail_num = parts[2] if len(parts) > 2 else ""
+                if verdict == "PASS":    status = "✅ PASS"
+                elif verdict == "FAIL":  status = f"❌ FAIL (test #{fail_num})"
+                elif verdict == "TIMEOUT": status = "⏱️ TIMEOUT"
+                else:                    status = "❓ UNKNOWN"
+                results.append({"Test": name, "Result": status})
+                pct = len(results) / len(bins)
+                progress.progress(pct, text=f"[{len(results)}/{len(bins)}] {name}: {status}")
+                live_table.dataframe(pd.DataFrame(results), use_container_width=True)
+
+            proc.wait()
+            progress.progress(1.0, text="Gauntlet complete!")
+            df = pd.DataFrame(results) if results else pd.DataFrame(columns=["Test","Result"])
             passed = (df["Result"].str.startswith("✅")).sum()
             failed = len(df) - passed
             st.markdown(f"### Score: **{passed}/{len(df)}** tests passed")
