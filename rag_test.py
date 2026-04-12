@@ -65,35 +65,12 @@ MANIFEST_FILE     = f"{CHROMA_DIR}/manifest.json"  # tracks ingested slug hashes
 # ── Test Questions ─────────────────────────────────────────────────────────────
 
 EVAL_QUESTIONS = [
-    # 1. Decode & Immediate Generation
-    "How do you structure the Verilog case statements in the Instruction Decoder to safely extract opcodes and route the correct sign-extended immediate logic for R, I, S, B, U, and J formats without inferring latches?",
+    " In RV32I, what are the exact funct3 binary bit patterns for each of the six conditional branch instructions: BEQ, BNE, BLT, BGE, BLTU, BGEU?",
     
-    # 2. Top-Level & Verilator Integration
-    "In a SystemVerilog top-level module for a single-cycle RV32I core, how should the clock, synchronous reset, and flat memory interface ports be defined to ensure clean compilation and compatibility with a Verilator C++ testbench?",
+    "The RISC-V test macro CHECK_XLEN uses bltz a0, label. What is the assembly expansion of bltz in terms of a real RISC-V instruction, and what funct3 field value will appear in the encoded instruction word?",
     
-    # 3. Testbench / tohost interface
-    "Write the Verilog monitor logic required in the data memory interface to detect a store operation to the `tohost` address (0x80001000) and extract the pass/fail code for the simulation environment.",
-    
-    # 4. Byte-masking (Crucial for SB/SH/SW)
-    "How do you implement the combinational Verilog logic to generate the 4-bit `dmem_wmask` and align the `rs2` write data for SB, SH, and SW instructions based on the lower 2 bits of the ALU calculated address?",
-    
-    # 5. Register File x0 Invariant
-    "Describe the Verilog implementation of a dual-read, single-write RV32I Register File that natively enforces the x0 hardwired-to-zero invariant, specifically addressing the write-enable gating required to pass TEST_RR_ZERODEST.",
-    
-    # 6. Branch Logic & Next-PC
-    "How do you design the Verilog Next-PC (NPC) multiplexer and branch condition evaluation logic to correctly route either `PC+4` or `PC+imm` synchronously, ensuring no timing loops?",
-    
-    # 7. Datapath Routing
-    "Provide the Verilog structural mapping and control signal assignments needed to multiplex data from the Register File, through the ALU, and back to the Register File write-port during the execution of a standard R-type instruction.",
-    
-    # 8. Load Alignment & Extension
-    "Describe the Verilog multiplexing and bit-slicing logic required in the memory writeback stage to properly shift, sign-extend (LB, LH), or zero-extend (LBU, LHU) the 32-bit raw read data from the data memory.",
-    
-    # 9. JALR & Alignment Exceptions
-    "How do you implement the Verilog logic to clear the LSB for JALR target addresses (`& ~1`), and simultaneously assert an `instruction_misaligned` exception signal if the resulting branch or jump target is not 32-bit aligned?",
-    
-    # 10. ALU Shifter Logic
-    "Explain the SystemVerilog implementation of the ALU's right-shift unit, specifically how to distinguish between SRL (logical) and SRA (arithmetic) utilizing the `$signed()` system task or manual sign-bit replication to avoid synthesis mismatches."
+    "When a RISC-V CPU executes sb t0, 1(a0) and a0 contains 0x00000004, what byte address is written, and if the external data bus is 32-bit word-addressed with byte-enable strobes, what is the value of the 4-bit write strobe and how many bits must the write data be left-shifted before placing it on the bus?",
+    "In the RV32I encoding for load instructions (opcode 0000011), what does funct3[2] equal for LB versus LBU? And which one performs sign extension versus zero extension?"
 ]
 
 
@@ -576,6 +553,12 @@ class RateLimiter:
 
     def wait(self, tokens_needed: int):
         """Block until this request can safely be made within rate limits."""
+        # If this single request is bigger than the whole window, we can never
+        # satisfy the budget by waiting — just proceed immediately to avoid an
+        # infinite loop (the API will return a 429 if we really are over limit).
+        if tokens_needed > self.max_tpm:
+            return
+
         while True:
             self._purge()
             tpm_ok = (self._used_tokens() + tokens_needed) <= self.max_tpm

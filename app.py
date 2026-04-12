@@ -447,7 +447,8 @@ MANDATORY OUTPUT — valid JSON only, no prose:
     "No hazard detection unit, no forwarding multiplexers — not needed in single-cycle.",
     "Simple synchronous memory interface with byte-enable for loads/stores.",
     "The load_store module is a purely combinational masking unit that acts as an interface to external memory. It MUST NOT have a clock (clk) input.",
-    "x0 hardwired to zero. No compressed instructions, no FP, no privileged mode."
+    "x0 hardwired to zero. No compressed instructions, no FP, no privileged mode.",
+    "Naming Rule: A module name MUST NEVER exactly match any of its port names (e.g. pc_next output port is next_pc, not pc_next). LLMs hallucinate badly on port name collisions."
   ],
   "missing_spec": ["list of things the user should clarify, empty if none"],
   "instruction_groups": [
@@ -503,13 +504,13 @@ SCHEMA (every field is MANDATORY):
   "reg_write":   1,            // 1 = writes to rd, 0 = does not
   "mem_read":    0,            // 1 = load instruction
   "mem_write":   0,            // 1 = store instruction
-  "mem_size":    "N/A",        // data width: "8" | "16" | "32" | "N/A"
-  "mem_extend":  "N/A",        // "signed" | "unsigned" | "N/A"
+  "mem_size":    "N/A",        // "2'b00" (byte) | "2'b01" (half) | "2'b10" (word) | "N/A"
+  "mem_extend":  "N/A",        // "0" (sign-extend) | "1" (zero-extend) | "N/A"
   "branch":      0,            // 1 = conditional branch
-  "branch_type": "N/A",        // "eq"|"ne"|"lt"|"ge"|"ltu"|"geu"|"N/A"  — used by branch_unit comparator directly
+  "branch_type": "N/A",        // "3'b000"(BEQ)|"3'b001"(BNE)|"3'b100"(BLT)|"3'b101"(BGE)|"3'b110"(BLTU)|"3'b111"(BGEU) | "N/A"
   "jump":        0,            // 1 = unconditional jump (JAL/JALR)
-  "jump_type":   "N/A",        // "jal" | "jalr" | "N/A"  — JALR requires pc_next to clear LSB: target &= ~1
-  "imm_type":    "N/A",        // "I" | "S" | "B" | "U" | "J" | "N/A"
+  "jump_type":   "N/A",        // "0" (jal) | "1" (jalr) | "N/A" 
+  "imm_type":    "N/A",        // "3'b000"(I) | "3'b001"(S) | "3'b010"(B) | "3'b011"(U) | "3'b100"(J) | "N/A"
   "notes":       ""
 }
 
@@ -528,7 +529,7 @@ Example 2 — LUI (U-type — imm bypasses ALU entirely via result_src, ALU is I
   "instruction": "LUI", "format": "U", "opcode": "0110111", "funct3": "N/A", "funct7": "N/A",
   "ALU_op": "ADD", "alu_src_a": "zero", "alu_src_b": "imm", "result_src": "imm",
   "reg_write": 1, "mem_read": 0, "mem_write": 0, "mem_size": "N/A", "mem_extend": "N/A",
-  "branch": 0, "branch_type": "N/A", "jump": 0, "jump_type": "N/A", "imm_type": "U",
+  "branch": 0, "branch_type": "N/A", "jump": 0, "jump_type": "N/A", "imm_type": "3'b011",
   "notes": "rd = imm<<12; result_src=imm bypasses ALU — the mux routes imm directly to regfile"
 }
 
@@ -537,25 +538,25 @@ Example 3 — BEQ (B-type — branch_type drives dedicated comparator, NOT ALU s
   "instruction": "BEQ", "format": "B", "opcode": "1100011", "funct3": "000", "funct7": "N/A",
   "ALU_op": "ADD", "alu_src_a": "rs1", "alu_src_b": "rs2", "result_src": "N/A",
   "reg_write": 0, "mem_read": 0, "mem_write": 0, "mem_size": "N/A", "mem_extend": "N/A",
-  "branch": 1, "branch_type": "eq", "jump": 0, "jump_type": "N/A", "imm_type": "B",
-  "notes": "branch_unit receives branch_type=eq and compares rs1==rs2 directly"
+  "branch": 1, "branch_type": "3'b000", "jump": 0, "jump_type": "N/A", "imm_type": "3'b010",
+  "notes": "branch_unit receives branch_type=3'b000 and compares rs1==rs2 directly"
 }
 
-Example 4 — JALR (I-type — jump_type=jalr triggers LSB clear on target address):
+Example 4 — JALR (I-type — jump_type=1 (jalr) triggers LSB clear on target address):
 {
   "instruction": "JALR", "format": "I", "opcode": "1100111", "funct3": "000", "funct7": "N/A",
   "ALU_op": "ADD", "alu_src_a": "rs1", "alu_src_b": "imm", "result_src": "pc+4",
   "reg_write": 1, "mem_read": 0, "mem_write": 0, "mem_size": "N/A", "mem_extend": "N/A",
-  "branch": 0, "branch_type": "N/A", "jump": 1, "jump_type": "jalr", "imm_type": "I",
-  "notes": "pc_next MUST clear bit[0]: target = (rs1+imm) & ~32'h1. rd = pc+4"
+  "branch": 0, "branch_type": "N/A", "jump": 1, "jump_type": "1", "imm_type": "3'b000",
+  "notes": "next_pc MUST clear bit[0]: target = (rs1+imm) & ~32'h1. rd = pc+4"
 }
 
 Example 5 — LB (I-type load — result_src=mem, mem_size and mem_extend critical):
 {
   "instruction": "LB", "format": "I", "opcode": "0000011", "funct3": "000", "funct7": "N/A",
   "ALU_op": "ADD", "alu_src_a": "rs1", "alu_src_b": "imm", "result_src": "mem",
-  "reg_write": 1, "mem_read": 1, "mem_write": 0, "mem_size": "8", "mem_extend": "signed",
-  "branch": 0, "branch_type": "N/A", "jump": 0, "jump_type": "N/A", "imm_type": "I",
+  "reg_write": 1, "mem_read": 1, "mem_write": 0, "mem_size": "2'b00", "mem_extend": "0",
+  "branch": 0, "branch_type": "N/A", "jump": 0, "jump_type": "N/A", "imm_type": "3'b000",
   "notes": "rd = sign_ext(mem[rs1+imm][7:0])"
 }
 
@@ -611,8 +612,8 @@ PER-MODULE PORT CONTRACTS (use EXACTLY these port names for interconnect):
                alu_src_a[1:0], alu_src_b, result_src[1:0], 
                reg_write, mem_read, mem_write, mem_size[1:0], mem_extend, 
                branch, branch_type[2:0], jump, jump_type, alu_op[3:0], imm_type[2:0]
-  pc_next    : pc[31:0], imm[31:0], rs1[31:0], taken, jump, jump_type → pc_next[31:0]
-               CRITICAL: if jump_type=1 (JALR), apply `pc_next = (rs1+imm) & ~32'h1` (clear LSB)
+  pc_next    : pc[31:0], imm[31:0], rs1[31:0], taken, jump, jump_type → next_pc[31:0]
+               CRITICAL: if jump_type=1 (JALR), apply `next_pc = (rs1+imm) & ~32'h1` (clear LSB)
   top        : clk, resetn, imem_rdata[31:0], dmem_rdata[31:0] 
                → imem_addr[31:0], dmem_addr[31:0], dmem_wdata[31:0], dmem_wstrb[3:0], dmem_read, dmem_write
                (instantiates all sub-modules; pure CPU core, NO tohost logic)
@@ -623,6 +624,16 @@ MULTIPLEXER CONTRACTS (Enforce these mappings in top.v and control.v):
   result_src = 2'b00: alu  |  2'b01: mem |  2'b10: pc+4 | 2'b11: imm (LUI bypass)
 
 RULES:
+- STRICT LINTER RULE (UNUSED SIGNALS): Verilator will fail if you declare a wire but don't read it.
+  1. DO NOT declare intermediate wires you don't use (e.g., `alu_zero` if the branch_unit does comparisons).
+  2. If a module input has unused bits (like `instr[6:0]` in `imm_gen`), you MUST wrap the port definition in pragmas:
+     `/* verilator lint_off UNUSED */`
+     `input logic [31:0] instr,`
+     `/* verilator lint_on UNUSED */`
+  3. If you leave a submodule output port unconnected in `top.v`, you MUST use empty parentheses AND wrap the instantiation:
+     `/* verilator lint_off PINCONNECTEMPTY */`
+     `alu u_alu ( ... .zero() );`
+     `/* verilator lint_on PINCONNECTEMPTY */`
 - STRICT LINTER RULE: All assignments MUST have explicitly matching bit widths. Do NOT rely on implicit zero-extension or truncation. If assigning a 1-bit or 8-bit value to a 32-bit net, you must explicitly pad it (e.g., use `32'b1` instead of `1'b1`, or `{24'b0, val[7:0]}`).
 - Use `always_comb` for combinational logic. Every `case` MUST have a `default` clause.
 - Use `always_ff @(posedge clk or negedge resetn)` for sequential elements (regfile write, PC).
@@ -630,13 +641,49 @@ RULES:
 - control.v: derive all outputs from the ISA truth table using opcode/funct3/funct7b5.
 - Add a one-line comment on every non-obvious assignment.
 - Do NOT generate a testbench or any tohost/HTIF logic. Module definition only.
+- HARD NAMING RULE: Do not use the exact module name as a port name inside that module. Always use a distinct suffix/prefix for the port (e.g. `next_pc` for the output of `pc_next`).
+
+CANONICAL ALU_OP ENCODING TABLE — BOTH alu.v AND control.v MUST USE THESE EXACT VALUES:
+  4'b0000 = ADD    |  4'b0001 = SUB    |  4'b0010 = SLL    |  4'b0011 = SLT
+  4'b0100 = SLTU   |  4'b0101 = XOR    |  4'b0110 = SRL    |  4'b0111 = SRA
+  4'b1000 = OR     |  4'b1001 = AND
+This table is LOCKED. Do NOT invent a different numbering. Both modules are generated separately
+and MUST agree on this binary interface or the CPU will silently compute wrong results.
+Mapping to RISC-V funct3 (R-type / OP-IMM): ADD=000, SLL=001, SLT=010, SLTU=011,
+  XOR=100, SRL=101(f7b5=0)/SRA=101(f7b5=1), OR=110, AND=111
+
+SRA SYNTHESIS RULE — CRITICAL:
+  NEVER write: `result = $signed(a) >>> shamt`
+  ALWAYS use a signed intermediate to force arithmetic shift under strict synthesizers:
+    `logic signed [31:0] signed_a; assign signed_a = $signed(a);`
+    `result = signed_a >>> shamt;`  // now the target type preserves sign extension
+
+SUB-WORD MEMORY SHIFT RULE (load_store.v):
+  For STORES: shift write data UP to the correct byte lane:
+    `mem_wdata = wdata_masked << (byte_offset * 8);`  where byte_offset = addr[1:0]
+  For LOADS: shift read data DOWN from byte lane then mask/extend:
+    `extracted = mem_rdata >> (byte_offset * 8);` then mask to mem_size and sign/zero extend.
+  For mem_addr to external bus: ALWAYS word-align: `mem_addr = {addr[31:2], 2'b00};`
+  This is mandatory for testbench byte-lane emulation to work correctly.
 Output ONLY the Verilog code inside a ```verilog block, no prose before or after.
 """
 
 
+# Hard limit of the model — input_tokens + max_tokens must not exceed this.
+_MODEL_CTX_LIMIT = 7800   # 8000 TPM limit minus 200-token safety margin
+
+
 def llm_call(groq_client, system: str, user: str, limiter, max_tokens: int = 4096, stream=False) -> str:
-    """Single LLM call with rate limiting. Returns full string."""
-    total_est = len(system) // 4 + len(user) // 4 + max_tokens
+    """Single LLM call with rate limiting.
+
+    Auto-clamps max_tokens so that estimated_input_tokens + max_tokens ≤ 7800
+    (the model hard limit is 8000 TPM; we keep a 200-token safety margin).
+    Returns full string.
+    """
+    input_est  = len(system) // 4 + len(user) // 4   # rough token estimate for input
+    safe_max   = max(256, _MODEL_CTX_LIMIT - input_est)   # headroom left for output
+    actual_max = min(max_tokens, safe_max)              # never exceed what the model allows
+    total_est  = input_est + actual_max
     limiter.wait(total_est)
     if stream:
         completion = groq_client.chat.completions.create(
@@ -644,7 +691,7 @@ def llm_call(groq_client, system: str, user: str, limiter, max_tokens: int = 409
             messages=[{"role": "system", "content": system},
                       {"role": "user",   "content": user}],
             temperature=0.1,
-            max_tokens=max_tokens,
+            max_tokens=actual_max,
             stream=True,
         )
         result = ""
@@ -659,7 +706,7 @@ def llm_call(groq_client, system: str, user: str, limiter, max_tokens: int = 409
                 messages=[{"role": "system", "content": system},
                           {"role": "user",   "content": user}],
                 temperature=0.1,
-                max_tokens=max_tokens,
+                max_tokens=actual_max,
                 stream=False,
             )
             limiter.record(total_est)
@@ -672,9 +719,14 @@ def llm_call(groq_client, system: str, user: str, limiter, max_tokens: int = 409
 
 def _is_complete_verilog(code: str) -> bool:
     """Return True if the Verilog output ends with an endmodule (not truncated)."""
-    # Strip markdown fences and whitespace
+    # Strip markdown fences and trailing whitespace
     clean = re.sub(r'```[\w]*', '', code).strip()
-    return 'endmodule' in clean
+    # Must contain endmodule AND the last non-empty line must be 'endmodule' or close to it
+    if 'endmodule' not in clean:
+        return False
+    last_lines = [ln.strip() for ln in clean.splitlines() if ln.strip()]
+    # Accept if the last meaningful line is endmodule (or ``` after endmodule)
+    return last_lines[-1] in ('endmodule', '```') or 'endmodule' in last_lines[-1]
 
 
 # Forbidden RTL patterns — each entry is (regex_pattern, human_description)
@@ -705,12 +757,30 @@ _RTL_FORBIDDEN = [
 ]
 
 
+def _is_api_error(text: str) -> bool:
+    """Return True if the LLM response is an API error string (not Verilog)."""
+    stripped = text.strip()
+    return stripped.startswith("// API ERROR:") or "Error code:" in stripped[:120]
+
+
 def generate_verilog_with_continuation(
     groq_client, system: str, user_msg: str, limiter,
-    max_tokens: int = 4096, max_rounds: int = 3
+    max_tokens: int = 4096, max_rounds: int = 5
 ) -> tuple[str, list[str]]:
     """
     Generate a Verilog module with automatic truncation recovery.
+
+    Truncation: on each cut-off the continuation prompt re-anchors the model
+    with a budget-trimmed spec summary + the tail of already-generated code,
+    plus an open-block depth hint so it closes case/begin trees consistently.
+
+    Error handling (TWO guards):
+      1. INITIAL CALL ERROR  — if the very first call returns an API error
+         (e.g. 413), return that single error line immediately.  The output
+         file will contain one clean comment, not a mix of Verilog + errors.
+      2. CONTINUATION ERROR  — if a continuation round returns an API error,
+         discard the error response entirely and stop the loop.  The file
+         keeps the clean partial Verilog accumulated so far.
 
     Returns:
         (final_code, log_messages)  — log_messages is a list of human-readable
@@ -720,23 +790,84 @@ def generate_verilog_with_continuation(
     code = llm_call(groq_client, system, user_msg, limiter, max_tokens=max_tokens)
     logs.append(f"Round 1: generated {len(code)} chars.")
 
+    # Guard 1 — initial call returned an API error: bail out immediately
+    if _is_api_error(code):
+        error_line = code.strip().splitlines()[0]   # keep only the first error line
+        logs.append(f"🔴 API error on initial call — aborting: {error_line}")
+        return error_line, logs
+
+    def _open_blocks(src: str) -> str:
+        """Count unmatched begin/case keywords to give the model a hint."""
+        depth = 0
+        opens = []
+        for ln in src.splitlines():
+            stripped = ln.strip()
+            # Ignore comments
+            if stripped.startswith('//'):
+                continue
+            for kw in ('always_comb', 'always_ff', 'module'):
+                if re.match(rf'\b{kw}\b', stripped):
+                    opens.append(kw)
+            for kw in ('begin', 'case', 'casez', 'casex'):
+                depth += len(re.findall(rf'\b{kw}\b', stripped))
+            for kw in ('end', 'endcase'):
+                depth -= len(re.findall(rf'\b{kw}\b', stripped))
+        if depth <= 0:
+            return "(none — all blocks appear closed)"
+        return f"{depth} unmatched begin/case block(s) still open"
+
+    # Keep a running copy of the clean raw code (strip fences for analysis)
     for rnd in range(2, max_rounds + 2):
         if _is_complete_verilog(code):
             logs.append("✅ Module complete (endmodule found).")
             break
         logs.append(f"⚠️ Truncation detected (no endmodule). Firing continuation round {rnd}...")
+
+        # Strip markdown fences for the 'already generated' section
+        code_for_ctx = re.sub(r'```[\w]*\n?', '', code).strip()
+        open_hint = _open_blocks(code_for_ctx)
+
+        # ── Budget-aware context trimming ────────────────────────────────────
+        # system prompt ≈ len(system)//4 tokens.  We have _MODEL_CTX_LIMIT total.
+        # Reserve ~2000 tokens for output continuation, use the rest for input.
+        sys_toks  = len(system) // 4
+        out_toks  = 2000
+        input_budget_chars = (_MODEL_CTX_LIMIT - sys_toks - out_toks) * 4  # chars
+
+        # Fixed overhead for the template strings (~200 chars)
+        overhead  = 400
+        # Spec summary: first N chars of the original user_msg (port contracts + module line)
+        spec_chars = min(2000, input_budget_chars // 4)        # ≤ ¼ of budget for spec
+        code_chars = input_budget_chars - overhead - spec_chars  # rest for code tail
+        spec_summary = user_msg[:spec_chars].rstrip()
+        code_tail    = code_for_ctx[-max(500, code_chars):]     # always keep min 500 chars
+
         continuation_user = (
-            f"The previous generation was cut off. Here is what was generated so far:\n\n"
-            f"```verilog\n{code[-1500:]}\n```\n\n"
-            f"Continue EXACTLY from where it was cut off. "
-            f"Do NOT restart the module from the beginning. "
-            f"Output only the missing Verilog lines up to and including `endmodule`."
+            f"=== MODULE SPEC (truncated for budget) ===\n"
+            f"{spec_summary}\n\n"
+            f"=== ALREADY GENERATED CODE — TAIL (do NOT repeat this) ===\n"
+            f"```verilog\n{code_tail}\n```\n\n"
+            f"=== CONTINUATION INSTRUCTIONS ===\n"
+            f"The generation was cut off mid-stream. Open blocks: {open_hint}.\n"
+            f"- Continue EXACTLY from the last character above — do NOT restart the module.\n"
+            f"- Use the SAME variable names, signal widths, mux encodings, and alu_op constants.\n"
+            f"- Close every open begin/case block correctly, then emit `endmodule`.\n"
+            f"- Output ONLY the missing Verilog lines (no prose, no ```verilog fence needed)."
         )
         extra = llm_call(groq_client, system, continuation_user, limiter, max_tokens=max_tokens)
+
+        # Guard 2 — continuation round returned an API error: discard & stop
+        if _is_api_error(extra):
+            error_line = extra.strip().splitlines()[0]
+            logs.append(f"🔴 API error in continuation round {rnd}: {error_line}")
+            logs.append("⚠️ Stopping — returning clean partial Verilog (error NOT appended).")
+            break   # code stays clean; error string is discarded
+
         code = code + "\n" + extra
-        logs.append(f"Round {rnd}: appended {len(extra)} more chars.")
+        logs.append(f"Round {rnd}: appended {len(extra)} more chars (total {len(code)}).")
         if rnd == max_rounds + 1:
             logs.append("🔴 Max continuation rounds reached. Module may still be incomplete.")
+            break
 
     return code, logs
 
@@ -1208,12 +1339,19 @@ with tab_agent:
                     """).strip()
 
                     # Step 1: Generate with automatic truncation continuation
+                    # max_tokens is auto-clamped in llm_call() to fit within the 8K model limit.
+                    # Requesting 4096 gives llm_call enough budget to trim as needed per module.
+                    gen_max_tokens = 4096
                     verilog, cont_logs = generate_verilog_with_continuation(
-                        groq_client, RTL_GENERATOR_SYSTEM, user_msg, limiter, max_tokens=4096
+                        groq_client, RTL_GENERATOR_SYSTEM, user_msg, limiter,
+                        max_tokens=gen_max_tokens, max_rounds=5
                     )
                     # Step 2: Validate and auto-repair architectural violations
+                    # If the module was assembled from continuations, first stitch & clean fences
+                    verilog_clean = re.sub(r'```[\w]*\n?', '', verilog).strip()
                     verilog, val_logs = validate_and_repair_verilog(
-                        groq_client, RTL_GENERATOR_SYSTEM, user_msg, verilog, limiter, max_tokens=4096
+                        groq_client, RTL_GENERATOR_SYSTEM, user_msg, verilog_clean, limiter,
+                        max_tokens=gen_max_tokens
                     )
                     all_rtl[mod_name] = verilog
                     # Surface the engine logs so the user can see what happened
