@@ -635,18 +635,32 @@ RULES:
      `alu u_alu ( ... .zero() );`
      `/* verilator lint_on PINCONNECTEMPTY */`
 - STRICT LINTER RULE: All assignments MUST have explicitly matching bit widths. Do NOT rely on implicit zero-extension or truncation. If assigning a 1-bit or 8-bit value to a 32-bit net, you must explicitly pad it (e.g., use `32'b1` instead of `1'b1`, or `{24'b0, val[7:0]}`).
-- Use `always_comb` for combinational logic. Every `case` MUST have a `default` clause.
+- STRICT LINTER RULE (WIDTH): Verilator strictly checks bit widths on shift operations (`<<`, `>>`). You MUST wrap tricky shift operations (especially in load_store.v) in linting pragmas to satisfy Verilator:
+     `/* verilator lint_off WIDTH */`
+     `assign shift_amt = byte_offset << 3;`
+     `assign mem_wdata = wdata << shift_amt;`
+     `/* verilator lint_on WIDTH */`
+- STRICT LINTER RULE (CASEINCOMPLETE): Verilator will fail if you use a `case` statement without a `default:` clause. you MUST put `default: begin end` inside EVERY `case` statement, even if you assigned default values before the `case`!
+- Use `always_comb` for combinational logic.
 - Use `always_ff @(posedge clk or negedge resetn)` for sequential elements (regfile write, PC).
 - x0 write guard: `if (we && rd != 5'd0)` in regfile.
 - control.v: derive all outputs from the ISA truth table using opcode/funct3/funct7b5.
 - Add a one-line comment on every non-obvious assignment.
 - Do NOT generate a testbench or any tohost/HTIF logic. Module definition only.
 - HARD NAMING RULE: Do not use the exact module name as a port name inside that module. Always use a distinct suffix/prefix for the port (e.g. `next_pc` for the output of `pc_next`).
+- STRICT ARCHITECTURE RULE (BRANCH ENABLE): `branch_unit` MUST take `branch` (the enable signal from control) as an input port and MUST guard the output (`taken = branch & condition_met;`). If you do not supervise the condition with the enable, the CPU will randomly jump on ADD/SUB instructions!
 
 CANONICAL ALU_OP ENCODING TABLE — BOTH alu.v AND control.v MUST USE THESE EXACT VALUES:
   4'b0000 = ADD    |  4'b0001 = SUB    |  4'b0010 = SLL    |  4'b0011 = SLT
   4'b0100 = SLTU   |  4'b0101 = XOR    |  4'b0110 = SRL    |  4'b0111 = SRA
   4'b1000 = OR     |  4'b1001 = AND
+
+CANONICAL IMM_TYPE ENCODING TABLE — BOTH imm_gen.v AND control.v MUST USE THESE EXACT VALUES:
+  3'b000 = I-type (ADDI, JALR, Loads)
+  3'b001 = S-type (Stores)
+  3'b010 = B-type (Branches)
+  3'b011 = U-type (LUI, AUIPC)
+  3'b100 = J-type (JAL)
 This table is LOCKED. Do NOT invent a different numbering. Both modules are generated separately
 and MUST agree on this binary interface or the CPU will silently compute wrong results.
 Mapping to RISC-V funct3 (R-type / OP-IMM): ADD=000, SLL=001, SLT=010, SLTU=011,
@@ -665,12 +679,180 @@ SUB-WORD MEMORY SHIFT RULE (load_store.v):
     `extracted = mem_rdata >> (byte_offset * 8);` then mask to mem_size and sign/zero extend.
   For mem_addr to external bus: ALWAYS word-align: `mem_addr = {addr[31:2], 2'b00};`
   This is mandatory for testbench byte-lane emulation to work correctly.
-Output ONLY the Verilog code inside a ```verilog block, no prose before or after.
+Output ONLY the raw Verilog code. DO NOT wrap the code in ```verilog or any other markdown fences. Do NOT add any introductory comments, conversational text, or prose at the beginning or end. The very first line of your output MUST be the `module` declaration.
 """
 
 
 # Hard limit of the model — input_tokens + max_tokens must not exceed this.
 _MODEL_CTX_LIMIT = 7800   # 8000 TPM limit minus 200-token safety margin
+
+
+
+# ── API Key Rotator ────────────────────────────────────────────────────────────
+class ApiKeyRotator:
+    """
+    Manages automatic rotation across multiple Groq API keys.
+
+    Keys loaded from .env in priority order:
+      GROQ_API_KEY  →  GROQ_API_KEY_OLD  →  GROQ_API_KEY_OLDER
+
+    Rotation policy — based on HTTP status code + error body:
+      413  → Request too large (per-request TPM size).
+             NEVER rotate. Caller must shrink input.
+      429  → Could be per-minute OR per-day. Distinguish by message content:
+             • contains 'per minute' / 'tpm' / 'rpm' → rate-limit, sleep 60s, retry.
+             • contains 'per day' / 'tpd' / 'rpd' / 'daily' → daily quota, rotate.
+             • 'quota_exceeded' / 'insufficient_quota' (no "minute") → daily, rotate.
+             • anything else → assume per-minute, sleep and retry (safer than rotating).
+    """
+
+    # Signals that ONLY appear in daily/account quota messages (not per-minute)
+    _DAILY_SIGNALS = (
+        "per day",          # Groq: "tokens per day (TPD)"
+        "tpd",              # Groq daily abbreviation
+        "rpd",              # Groq daily request abbreviation
+        "daily limit",
+        "daily quota",
+        "quota_exceeded",
+        "insufficient_quota",
+        "exceeded your current quota",
+        "organization_quota_exceeded",
+    )
+
+    # Signals that ONLY appear in per-minute rate limit messages
+    _MINUTE_SIGNALS = (
+        "per minute",       # Groq: "tokens per minute (TPM)"
+        "tpm",
+        "rpm",
+        "rate_limit_exceeded",
+        "request too large",
+    )
+
+    def __init__(self):
+        candidates = [
+            os.getenv("GROQ_API_KEY", "").strip(),
+            os.getenv("GROQ_API_KEY_OLD", "").strip(),
+            os.getenv("GROQ_API_KEY_OLDER", "").strip(),
+        ]
+        self.keys = [k for k in candidates if k]
+        self._idx = 0
+        self._exhausted: set[int] = set()
+        # Per-key token usage tracking (TPD budget management)
+        # Groq TPD limit = 200,000. We use a 10,000-token safety margin.
+        self._DAILY_LIMIT    = 200_000
+        self._TPD_SAFETY     = 10_000   # headroom — don't cut it too close
+        self._tokens_used: dict[int, int] = {}  # key_index → tokens consumed today
+
+    @property
+    def active_key(self) -> str:
+        return self.keys[self._idx] if self.keys else ""
+
+    @property
+    def active_label(self) -> str:
+        labels = ["GROQ_API_KEY", "GROQ_API_KEY_OLD", "GROQ_API_KEY_OLDER"]
+        return labels[self._idx] if self._idx < len(labels) else f"key#{self._idx}"
+
+    @property
+    def keys_remaining(self) -> int:
+        return len(self.keys) - len(self._exhausted)
+
+    def tokens_used_today(self, key_idx: int | None = None) -> int:
+        """Return tokens consumed today for the given key (defaults to active)."""
+        idx = key_idx if key_idx is not None else self._idx
+        return self._tokens_used.get(idx, 0)
+
+    def tokens_remaining_today(self, key_idx: int | None = None) -> int:
+        """Return estimated TPD budget remaining for a key."""
+        return self._DAILY_LIMIT - self._TPD_SAFETY - self.tokens_used_today(key_idx)
+
+    def record_tokens(self, n_tokens: int) -> None:
+        """Accumulate actual token usage for the currently active key."""
+        self._tokens_used[self._idx] = self._tokens_used.get(self._idx, 0) + n_tokens
+
+    def preflight_ensure_budget(self, needed: int) -> tuple[bool, object | None]:
+        """
+        Pre-flight check: if the current key cannot afford `needed` tokens today,
+        proactively search ALL remaining keys for one that can.
+
+        Returns:
+            (True, new_client)  if a suitable key was found AND a rotation happened.
+            (True, None)        if the current key already has enough budget.
+            (False, None)       if NO key has sufficient budget.
+        """
+        if self.tokens_remaining_today() >= needed:
+            return True, None   # current key is fine — no rotation needed
+
+        # Current key is too close to limit — find next key with budget
+        for i in range(len(self.keys)):
+            if i == self._idx:
+                continue  # already checked
+            if i in self._exhausted:
+                continue  # hard-exhausted (429 daily error)
+            if self.tokens_remaining_today(i) >= needed:
+                # Found a key with budget — rotate to it proactively
+                old_label = self.active_label
+                self._idx = i
+                new_client = self.make_client()
+                st.toast(
+                    f"🔋 Pre-flight TPD check: **{old_label}** only has "
+                    f"{self.tokens_remaining_today(i):,} tokens left — "
+                    f"switched to **{self.active_label}** before the call.",
+                    icon="🔄"
+                )
+                return True, new_client
+
+        return False, None  # All keys are out of budget
+
+    def classify_error(self, exc: Exception) -> str:
+        """
+        Returns one of: 'daily' | 'per_minute' | 'request_size' | 'other'
+
+        Uses HTTP status code first (most reliable), then falls back to
+        message content. Never misclassifies 413 as daily quota.
+        """
+        status_code = getattr(exc, 'status_code', None)
+        err_str     = str(exc).lower()
+
+        # ── 413: Request Entity Too Large ──────────────────────────────────────
+        # This is ALWAYS a single-request size limit (tokens > 8K for this call).
+        # Rotating keys does nothing — same key will also reject the same payload.
+        if status_code == 413:
+            return 'request_size'
+
+        # ── 429: Rate Limited — need to distinguish per-minute vs per-day ──────
+        if status_code == 429 or 'rate' in err_str or 'quota' in err_str or '429' in err_str:
+            # Per-minute signals have higher priority because they are more common
+            # and misclassifying them as daily wastes the rotation.
+            if any(sig in err_str for sig in self._MINUTE_SIGNALS):
+                return 'per_minute'
+            if any(sig in err_str for sig in self._DAILY_SIGNALS):
+                return 'daily'
+            # Ambiguous 429 — safer to treat as per-minute (sleep & retry)
+            return 'per_minute'
+
+        # ── Other non-rate-limit errors ─────────────────────────────────────────
+        return 'other'
+
+    def rotate(self) -> bool:
+        """Mark current key as exhausted and move to next. Returns True if a fresh key is available."""
+        self._exhausted.add(self._idx)
+        for i in range(len(self.keys)):
+            if i not in self._exhausted:
+                self._idx = i
+                return True
+        return False
+
+    def make_client(self):
+        """Return a fresh Groq client using the currently active key."""
+        from groq import Groq
+        return Groq(api_key=self.active_key)
+
+
+def get_rotator() -> ApiKeyRotator:
+    """Session-state singleton so the rotator persists across reruns."""
+    if "_key_rotator" not in st.session_state or not hasattr(st.session_state["_key_rotator"], 'classify_error'):
+        st.session_state["_key_rotator"] = ApiKeyRotator()
+    return st.session_state["_key_rotator"]
 
 
 def llm_call(groq_client, system: str, user: str, limiter, max_tokens: int = 4096, stream=False) -> str:
@@ -700,8 +882,54 @@ def llm_call(groq_client, system: str, user: str, limiter, max_tokens: int = 409
         limiter.record(total_est)
         return result
     else:
+        def _parse_and_toast(raw_resp):
+            resp = raw_resp.parse()
+            try:
+                u_in = getattr(resp.usage, 'prompt_tokens', '?')
+                u_out = getattr(resp.usage, 'completion_tokens', '?')
+                u_tot = getattr(resp.usage, 'total_tokens', '?')
+            except Exception:
+                u_in = u_out = u_tot = '?'
+
+            rem_tpm = raw_resp.headers.get('x-ratelimit-remaining-tokens', '?')
+            rem_rpd = raw_resp.headers.get('x-ratelimit-remaining-requests', '?')
+
+            # Feed real usage back into the rotator for proactive TPD tracking
+            _rot = get_rotator()
+            if isinstance(u_tot, int):
+                _rot.record_tokens(u_tot)
+                limiter.record(u_tot)
+                tpd_remaining = _rot.tokens_remaining_today()
+            else:
+                limiter.record(total_est)
+                tpd_remaining = '?'
+
+            st.toast(
+                f"📊 **Tokens:** {u_in} In | {u_out} Out | {u_tot} Tot\n"
+                f"🔋 **Remaining:** {rem_tpm} TPM | {rem_rpd} RPD | ~{tpd_remaining:,} TPD" 
+                if isinstance(tpd_remaining, int) else
+                f"📊 **Tokens:** {u_in} In | {u_out} Out | {u_tot} Tot\n"
+                f"🔋 **Remaining:** {rem_tpm} TPM | {rem_rpd} RPD",
+                icon="📶"
+            )
+            return resp
+
         try:
-            resp = groq_client.chat.completions.create(
+            # ── Pre-flight TPD budget check ─────────────────────────────────────
+            # Check if the current key has enough daily tokens for this call.
+            # If not, proactively rotate to the next key that does.
+            rotator = get_rotator()
+            budget_ok, new_client_pf = rotator.preflight_ensure_budget(actual_max)
+            if not budget_ok:
+                return (f"// API ERROR: All {len(rotator.keys)} keys are near their "
+                        f"daily token limit ({rotator._DAILY_LIMIT:,}). "
+                        f"Wait for quota reset or add more API keys.")
+            if new_client_pf is not None:
+                # Rotator chose a new key — use the new client for this call
+                groq_client = new_client_pf
+                st.session_state["_active_groq_client"] = groq_client
+
+            raw_response = groq_client.chat.completions.with_raw_response.create(
                 model="openai/gpt-oss-20b",
                 messages=[{"role": "system", "content": system},
                           {"role": "user",   "content": user}],
@@ -709,10 +937,87 @@ def llm_call(groq_client, system: str, user: str, limiter, max_tokens: int = 409
                 max_tokens=actual_max,
                 stream=False,
             )
-            limiter.record(total_est)
-            return resp.choices[0].message.content or ""
+            resp = _parse_and_toast(raw_response)
+            content = resp.choices[0].message.content or ""
+            finish  = getattr(resp.choices[0], 'finish_reason', 'unknown')
+
+            if finish == 'length':
+                # Model hit max_tokens → TRUNCATION, not a quota issue.
+                # Return whatever content exists (even empty). The continuation
+                # loop will see no 'endmodule' and fire a continuation round.
+                return content
+
+            if not content.strip():
+                # Genuinely empty response with finish_reason != 'length'
+                # → likely a soft quota / content-filter hit.
+                return f"// API ERROR: Empty response from model (finish_reason={finish!r}). Possible quota exhaustion."
+
+            return content
         except Exception as e:
-            return f"// API ERROR: {str(e)}"
+            rotator  = get_rotator()
+            err_type = rotator.classify_error(e)
+            err_str  = str(e)
+
+            if err_type == 'request_size':
+                # 413 — this request is too large for the model's context window.
+                # Rotating keys won't help — the same payload will be rejected everywhere.
+                # The caller's budget-trimming logic must shrink the prompt instead.
+                return f"// API ERROR: Request too large (413). Reduce prompt size. {err_str[:120]}"
+
+            elif err_type == 'per_minute':
+                # Short-window rate limit — wait 62s and retry ONCE with the same key.
+                old_label = rotator.active_label
+                st.toast(f"⏳ Per-minute limit hit on {old_label}. Waiting 62s then retrying…", icon="⏳")
+                time.sleep(62)
+                try:
+                    raw_r = groq_client.chat.completions.with_raw_response.create(
+                        model="openai/gpt-oss-20b",
+                        messages=[{"role": "system", "content": system},
+                                  {"role": "user",   "content": user}],
+                        temperature=0.1,
+                        max_tokens=actual_max,
+                        stream=False,
+                    )
+                    resp_r = _parse_and_toast(raw_r)
+                    content_r = resp_r.choices[0].message.content or ""
+                    finish_r  = getattr(resp_r.choices[0], 'finish_reason', 'unknown')
+                    if finish_r == 'length':
+                        return content_r
+                    return content_r if content_r.strip() else f"// API ERROR: Empty after rate-limit retry."
+                except Exception as e2:
+                    return f"// API ERROR: {str(e2)}"
+
+            elif err_type == 'daily':
+                # Daily/account quota exhausted — rotate to next key and retry.
+                old_label = rotator.active_label
+                if rotator.rotate():
+                    new_client = rotator.make_client()
+                    st.session_state["_active_groq_client"] = new_client
+                    st.toast(f"🔑 Daily quota on **{old_label}** → switched to **{rotator.active_label}**.", icon="🔄")
+                    try:
+                        raw2 = new_client.chat.completions.with_raw_response.create(
+                            model="openai/gpt-oss-20b",
+                            messages=[{"role": "system", "content": system},
+                                      {"role": "user",   "content": user}],
+                            temperature=0.1,
+                            max_tokens=actual_max,
+                            stream=False,
+                        )
+                        resp2 = _parse_and_toast(raw2)
+                        content2 = resp2.choices[0].message.content or ""
+                        finish2  = getattr(resp2.choices[0], 'finish_reason', 'unknown')
+                        if finish2 == 'length':
+                            return content2
+                        return content2 if content2.strip() else f"// API ERROR: Empty after key rotation."
+                    except Exception as e2:
+                        return f"// API ERROR: {str(e2)}"
+                else:
+                    return f"// API ERROR: All {len(rotator.keys)} API keys exhausted (daily quota). {err_str[:120]}"
+
+            else:
+                # Other errors (auth, network, etc.) — surface as-is.
+                return f"// API ERROR: {err_str}"
+
 
 
 # ── RTL-specific helpers ───────────────────────────────────────────────────────
@@ -845,14 +1150,14 @@ def generate_verilog_with_continuation(
         continuation_user = (
             f"=== MODULE SPEC (truncated for budget) ===\n"
             f"{spec_summary}\n\n"
-            f"=== ALREADY GENERATED CODE — TAIL (do NOT repeat this) ===\n"
+            f"=== ALREADY GENERATED CODE — TAIL ===\n"
             f"```verilog\n{code_tail}\n```\n\n"
             f"=== CONTINUATION INSTRUCTIONS ===\n"
             f"The generation was cut off mid-stream. Open blocks: {open_hint}.\n"
             f"- Continue EXACTLY from the last character above — do NOT restart the module.\n"
-            f"- Use the SAME variable names, signal widths, mux encodings, and alu_op constants.\n"
-            f"- Close every open begin/case block correctly, then emit `endmodule`.\n"
-            f"- Output ONLY the missing Verilog lines (no prose, no ```verilog fence needed)."
+            f"- Do NOT repeat any code from the tail above. Output ONLY what comes next.\n"
+            f"- Keep generating until you have correctly closed ALL blocks and emitted `endmodule`.\n"
+            f"- Output raw Verilog only, no markdown fences."
         )
         extra = llm_call(groq_client, system, continuation_user, limiter, max_tokens=max_tokens)
 
@@ -863,7 +1168,11 @@ def generate_verilog_with_continuation(
             logs.append("⚠️ Stopping — returning clean partial Verilog (error NOT appended).")
             break   # code stays clean; error string is discarded
 
-        code = code + "\n" + extra
+        # In case it emitted markdown despite instructions
+        extra = re.sub(r'^```[\w]*\n?', '', extra)
+        extra = re.sub(r'```\s*$', '', extra)
+
+        code = code + extra
         logs.append(f"Round {rnd}: appended {len(extra)} more chars (total {len(code)}).")
         if rnd == max_rounds + 1:
             logs.append("🔴 Max continuation rounds reached. Module may still be incomplete.")
@@ -991,6 +1300,20 @@ with st.sidebar:
         help="Overrides GROQ_API_KEY from .env",
     )
 
+    # ── Key rotation status panel ──────────────────────────────────────────
+    rotator = get_rotator()
+    if rotator.keys:
+        key_labels = ["GROQ_API_KEY", "GROQ_API_KEY_OLD", "GROQ_API_KEY_OLDER"]
+        for i, k in enumerate(rotator.keys):
+            is_active    = (i == rotator._idx)
+            is_exhausted = (i in rotator._exhausted)
+            icon  = "🟢" if is_active else ("🔴" if is_exhausted else "⚪")
+            label = key_labels[i] if i < len(key_labels) else f"Key {i+1}"
+            masked = f"{k[:8]}...{k[-4:]}" if len(k) > 12 else "****"
+            st.caption(f"{icon} `{label}`: `{masked}`{'  ← **active**' if is_active else ('  ~~exhausted~~' if is_exhausted else '')}")
+    if rotator.keys_remaining <= 1:
+        st.warning("⚠️ Only 1 key remaining — add more to `.env`.")
+
     st.divider()
     st.markdown("### RAG Settings")
     top_k_parents  = st.slider("Top-K Parents (context chunks)", 1, 5, 3)
@@ -1065,7 +1388,7 @@ with tab_agent:
                      not st.session_state.agent_rtl)
 
     _run_dirs = sorted([d for d in (PROJECT_ROOT / "pipeline_runs").glob("run_v*")
-                        if (d / "rtl").exists() or (d / "plan.json").exists()])
+                        if (d / "rtl").exists() or (d / "planner_state.json").exists()])
     if _run_dirs:
         _last_run = _run_dirs[-1]
         if session_empty:
@@ -1076,17 +1399,17 @@ with tab_agent:
             with _cr1:
                 if st.button("📋 Restore Plan", use_container_width=True, key="restore_plan"):
                     import json as _j
-                    _f = _last_run / "plan.json"
+                    _f = _last_run / "planner_state.json"
                     if _f.exists():
                         st.session_state.agent_plan = _j.loads(_f.read_text()); st.rerun()
-                    else: st.error("No plan.json found.")
+                    else: st.error("No planner_state.json found.")
             with _cr2:
                 if st.button("📊 Restore ISA", use_container_width=True, key="restore_isa"):
                     import json as _j
-                    _f = _last_run / "isa.json"
+                    _f = _last_run / "isa_expert_table.json"
                     if _f.exists():
                         st.session_state.agent_isa = _j.loads(_f.read_text()); st.rerun()
-                    else: st.error("No isa.json found.")
+                    else: st.error("No isa_expert_table.json found.")
             with _cr3:
                 if st.button("⚙️ Restore RTL", use_container_width=True, key="restore_rtl"):
                     _d = _last_run / "rtl"
@@ -1097,10 +1420,10 @@ with tab_agent:
             st.markdown("---")
             if st.button("⚡ Restore ALL (Plan + ISA + RTL) — Zero tokens!", use_container_width=True, type="primary", key="restore_all"):
                 import json as _j
-                if (_last_run / "plan.json").exists():
-                    st.session_state.agent_plan = _j.loads((_last_run / "plan.json").read_text())
-                if (_last_run / "isa.json").exists():
-                    st.session_state.agent_isa  = _j.loads((_last_run / "isa.json").read_text())
+                if (_last_run / "planner_state.json").exists():
+                    st.session_state.agent_plan = _j.loads((_last_run / "planner_state.json").read_text())
+                if (_last_run / "isa_expert_table.json").exists():
+                    st.session_state.agent_isa  = _j.loads((_last_run / "isa_expert_table.json").read_text())
                 _rtl_d = _last_run / "rtl"
                 if _rtl_d.exists():
                     st.session_state.agent_rtl = {v.stem: v.read_text(encoding="utf-8") for v in _rtl_d.glob("*.v")}
@@ -1182,6 +1505,9 @@ with tab_agent:
                 with st.expander("❓ Spec gaps — clarify before RTL"):
                     for m in plan["missing_spec"]:
                         st.markdown(f"- {m}")
+                        
+            with st.expander("👀 View Raw Planner JSON"):
+                st.json(plan)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1275,6 +1601,9 @@ with tab_agent:
             for fb in raw_fallbacks:
                 with st.expander(f"⚠️ Raw output for {fb.get('group', 'unknown')}"):
                     st.code(fb.get("raw", ""))
+                    
+            with st.expander("👀 View Raw ISA JSON"):
+                st.json(records)
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -1338,23 +1667,87 @@ with tab_agent:
                     Generate the complete synthesizable Verilog module for `{mod_name}`.
                     """).strip()
 
-                    # Step 1: Generate with automatic truncation continuation
-                    # max_tokens is auto-clamped in llm_call() to fit within the 8K model limit.
-                    # Requesting 4096 gives llm_call enough budget to trim as needed per module.
-                    gen_max_tokens = 4096
-                    verilog, cont_logs = generate_verilog_with_continuation(
-                        groq_client, RTL_GENERATOR_SYSTEM, user_msg, limiter,
-                        max_tokens=gen_max_tokens, max_rounds=5
-                    )
+                    # ── Live code viewer ──────────────────────────────────────────
+                    st.markdown(f"##### 🔧 `{mod_name}.v` — Live Generation")
+                    live_code = st.empty()   # placeholder updated after each round
+
+                    # Monkey-patch continuation to stream round-by-round previews
+                    def _gen_with_preview(mod_name=mod_name, user_msg=user_msg, live_code=live_code):
+                        import types
+                        logs = []
+                        code = llm_call(groq_client, RTL_GENERATOR_SYSTEM, user_msg, limiter, max_tokens=4096)
+                        logs.append(f"Round 1: generated {len(code)} chars.")
+                        live_code.code(re.sub(r'```[\w]*\n?', '', code).strip() or "(empty — possible quota hit)",
+                                       language="verilog")
+
+                        if _is_api_error(code):
+                            error_line = code.strip().splitlines()[0]
+                            logs.append(f"🔴 API error on initial call — aborting: {error_line}")
+                            return code, logs
+
+                        def _open_blocks(src):
+                            depth = 0
+                            for ln in src.splitlines():
+                                s = ln.strip()
+                                if s.startswith('//'): continue
+                                for kw in ('begin','case','casez','casex'):
+                                    depth += len(re.findall(rf'\b{kw}\b', s))
+                                for kw in ('end','endcase'):
+                                    depth -= len(re.findall(rf'\b{kw}\b', s))
+                            return "(none — all closed)" if depth <= 0 else f"{depth} open block(s)"
+
+                        for rnd in range(2, 7):
+                            if _is_complete_verilog(code):
+                                logs.append("✅ Module complete (endmodule found).")
+                                break
+                            logs.append(f"⚠️ Truncation detected. Firing continuation round {rnd}...")
+                            code_for_ctx = re.sub(r'```[\w]*\n?', '', code).strip()
+                            open_hint = _open_blocks(code_for_ctx)
+                            sys_toks = len(RTL_GENERATOR_SYSTEM) // 4
+                            budget_chars = (_MODEL_CTX_LIMIT - sys_toks - 2000) * 4
+                            spec_chars = min(2000, budget_chars // 4)
+                            code_chars = budget_chars - 400 - spec_chars
+                            cont_user = (
+                                f"=== MODULE SPEC (truncated for budget) ===\n{user_msg[:spec_chars]}\n\n"
+                                f"=== ALREADY GENERATED CODE — TAIL ===\n"
+                                f"```verilog\n{code_for_ctx[-max(500,code_chars):]}\n```\n\n"
+                                f"=== CONTINUATION INSTRUCTIONS ===\n"
+                                f"The generation was cut off mid-stream. Open blocks: {open_hint}.\n"
+                                f"- Continue EXACTLY from the last character above — do NOT restart the module.\n"
+                                f"- Do NOT repeat any code from the tail above. Output ONLY what comes next.\n"
+                                f"- Keep generating until you have correctly closed ALL blocks and emitted `endmodule`.\n"
+                                f"- Output raw Verilog only, no markdown fences."
+                            )
+                            extra = llm_call(groq_client, RTL_GENERATOR_SYSTEM, cont_user, limiter, max_tokens=4096)
+                            if _is_api_error(extra):
+                                logs.append(f"🔴 API error round {rnd}: {extra.strip().splitlines()[0]}")
+                                logs.append("⚠️ Stopping — returning clean partial code.")
+                                break
+                            
+                            extra = re.sub(r'^```[\w]*\n?', '', extra)
+                            extra = re.sub(r'```\s*$', '', extra)
+                            code = code + extra
+                            logs.append(f"Round {rnd}: appended {len(extra)} chars (total {len(code)}).")
+                            # Update live preview after each round
+                            live_code.code(re.sub(r'```[\w]*\n?', '', code).strip(), language="verilog")
+                            if rnd == 6:
+                                logs.append("🔴 Max rounds reached. Module may be incomplete.")
+                                break
+                        return code, logs
+
+                    verilog, cont_logs = _gen_with_preview()
+
                     # Step 2: Validate and auto-repair architectural violations
-                    # If the module was assembled from continuations, first stitch & clean fences
                     verilog_clean = re.sub(r'```[\w]*\n?', '', verilog).strip()
                     verilog, val_logs = validate_and_repair_verilog(
                         groq_client, RTL_GENERATOR_SYSTEM, user_msg, verilog_clean, limiter,
-                        max_tokens=gen_max_tokens
+                        max_tokens=4096
                     )
+                    # Final preview after repair
+                    live_code.code(re.sub(r'```[\w]*\n?', '', verilog).strip(), language="verilog")
+
                     all_rtl[mod_name] = verilog
-                    # Surface the engine logs so the user can see what happened
+                    # Surface the engine logs
                     for msg in cont_logs + val_logs:
                         if msg.startswith("✅"):
                             st.caption(f"`{mod_name}` · {msg}")

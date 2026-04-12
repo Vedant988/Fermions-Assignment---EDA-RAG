@@ -1,0 +1,5 @@
+GREAT , i have bigger vision the creation of *_microarch.yaml we leave it on llm with rag by asking a generic question to make a valid genric,accurate,universal_acceptor .yaml USING RAG+LLM and pass on this to next planner in prompt!!
+
+ensuring this : want to build a tool that can generate any CPU architecture in the world and Yes, you must rip out the hardcoded prompts and build the dynamic RAG-to-Schema pipeline to maximize Genericness.
+
+or more better cordination or thinkingpipeline thank this to guarantee acurate univarsal generator and compiler!!!!!!!
