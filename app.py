@@ -250,6 +250,7 @@ def save_pipeline_snapshot(label: str = "") -> Path:
     plan = st.session_state.get("agent_plan")
     isa  = st.session_state.get("agent_isa")
     rtl  = st.session_state.get("agent_rtl")
+    microarch = st.session_state.get("agent_microarch")
 
     # ── Raw JSONs ──────────────────────────────────────────────────────────────
     if plan:
@@ -258,6 +259,10 @@ def save_pipeline_snapshot(label: str = "") -> Path:
     if isa:
         with open(save_dir / "isa_expert_table.json", "w", encoding="utf-8") as f:
             json.dump(isa, f, indent=2)
+    if microarch:
+        import yaml
+        with open(save_dir / "microarch.yaml", "w", encoding="utf-8") as f:
+            yaml.dump(microarch, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
     if rtl:
         rtl_dir = save_dir / "rtl"
         rtl_dir.mkdir()
@@ -325,17 +330,17 @@ def save_pipeline_snapshot(label: str = "") -> Path:
 
     lines.append("---\n")
 
-    # PHASE 2 — ISA EXPERT
+    # PHASE 2 — ISA EXPERT / SYSTEMS ENGINEER
     lines.append("## Phase 2 — ISA Expert Agent\n")
     if isa:
-        typed = [r for r in isa if "instruction" in r]
-        raw_fallbacks = [r for r in isa if "instruction" not in r]
+        typed = [r for r in isa if "mnemonic" in r]
+        raw_fallbacks = [r for r in isa if "mnemonic" not in r]
 
         if typed:
             lines.append(f"**Total decoded instructions:** {len(typed)}\n")
             lines.append("### Control Signal Truth Table")
-            hdr_cols = ["instruction","format","opcode","funct3","funct7",
-                        "ALU_op","reg_write","mem_read","mem_write","branch","jump","alu_src","wb_src"]
+            hdr_cols = ["mnemonic","format","opcode","funct3","funct7b5",
+                        "alu_op_name","reg_write","mem_read","mem_write","branch","jump","alu_src_a","alu_src_b"]
             present = [c for c in hdr_cols if any(c in r for r in typed)]
             lines.append("| " + " | ".join(present) + " |")
             lines.append("| " + " | ".join(["---"]*len(present)) + " |")
@@ -344,7 +349,7 @@ def save_pipeline_snapshot(label: str = "") -> Path:
             lines.append("")
 
             # RAG contexts
-            contexts = [(r.get("instruction",""), r["_context_used"])
+            contexts = [(r.get("mnemonic",""), r.get("_context_used", ""))
                         for r in typed if "_context_used" in r]
             if contexts:
                 lines.append("### RAG Contexts Used Per Group")
@@ -418,7 +423,7 @@ def corpus_stats():
 
 
 # ── Session state init ─────────────────────────────────────────────────────────
-for _k, _v in [("agent_plan", None), ("agent_isa", None), ("agent_rtl", {})]:
+for _k, _v in [("agent_plan", None), ("agent_isa", None), ("agent_rtl", {}), ("agent_microarch", None)]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
@@ -492,84 +497,27 @@ SCHEMA (every field is MANDATORY):
 {
   "instruction": "ADD",        // mnemonic
   "format":      "R",          // R / I / S / B / U / J
-  "opcode":      "0110011",    // 7-bit binary string
-  "funct3":      "000",        // 3-bit binary string, "N/A" for U/J
-  "funct7":      "0000000",    // 7-bit binary string, "N/A" for non R-type
-  "ALU_op":      "ADD",        // ALU primitive: ADD SUB AND OR XOR SLT SLTU SLL SRL SRA
-                               //   NEVER PASS_B — use result_src="imm" to bypass ALU instead
-  "alu_src_a":   "rs1",        // First ALU operand mux: "rs1" | "pc" | "zero"
-  "alu_src_b":   "rs2",        // Second ALU operand mux: "rs2" | "imm"
-  "result_src":  "alu",        // Writeback DATA source mux: "alu" | "mem" | "pc+4" | "imm"
-                               //   LUI → "imm" (bypasses ALU), AUIPC → "alu", Loads → "mem"
-  "reg_write":   1,            // 1 = writes to rd, 0 = does not
+  "opcode":      "0110011",    // opcode binary string
+  "funct3":      "000",        // 3-bit binary string, or "N/A"
+  "funct7":      "0000000",    // 7-bit binary string, or "N/A"
+  "ALU_op":      "ADD",        // ALU primitive name
+  "alu_src_a":   "rs1",        // First ALU operand mux source
+  "alu_src_b":   "rs2",        // Second ALU operand mux source
+  "result_src":  "alu",        // Writeback DATA source mux
+  "reg_write":   1,            // 1 = writes to destination reg
   "mem_read":    0,            // 1 = load instruction
   "mem_write":   0,            // 1 = store instruction
-  "mem_size":    "N/A",        // "2'b00" (byte) | "2'b01" (half) | "2'b10" (word) | "N/A"
-  "mem_extend":  "N/A",        // "0" (sign-extend) | "1" (zero-extend) | "N/A"
+  "mem_size":    "N/A",        // access granularity name
+  "mem_extend":  "N/A",        // extension semantics (sign/zero)
   "branch":      0,            // 1 = conditional branch
-  "branch_type": "N/A",        // "3'b000"(BEQ)|"3'b001"(BNE)|"3'b100"(BLT)|"3'b101"(BGE)|"3'b110"(BLTU)|"3'b111"(BGEU) | "N/A"
-  "jump":        0,            // 1 = unconditional jump (JAL/JALR)
-  "jump_type":   "N/A",        // "0" (jal) | "1" (jalr) | "N/A" 
-  "imm_type":    "N/A",        // "3'b000"(I) | "3'b001"(S) | "3'b010"(B) | "3'b011"(U) | "3'b100"(J) | "N/A"
+  "branch_type": "N/A",        // semantic condition name
+  "jump":        0,            // 1 = unconditional jump
+  "jump_type":   "N/A",        // jump type semantics
+  "imm_type":    "N/A",        // immediate format name
   "notes":       ""
 }
 
-FIVE CANONICAL EXAMPLES (study before generating):
-
-Example 1 — ADD (R-type, both regs into ALU):
-{
-  "instruction": "ADD", "format": "R", "opcode": "0110011", "funct3": "000", "funct7": "0000000",
-  "ALU_op": "ADD", "alu_src_a": "rs1", "alu_src_b": "rs2", "result_src": "alu",
-  "reg_write": 1, "mem_read": 0, "mem_write": 0, "mem_size": "N/A", "mem_extend": "N/A",
-  "branch": 0, "branch_type": "N/A", "jump": 0, "jump_type": "N/A", "imm_type": "N/A", "notes": ""
-}
-
-Example 2 — LUI (U-type — imm bypasses ALU entirely via result_src, ALU is IDLE):
-{
-  "instruction": "LUI", "format": "U", "opcode": "0110111", "funct3": "N/A", "funct7": "N/A",
-  "ALU_op": "ADD", "alu_src_a": "zero", "alu_src_b": "imm", "result_src": "imm",
-  "reg_write": 1, "mem_read": 0, "mem_write": 0, "mem_size": "N/A", "mem_extend": "N/A",
-  "branch": 0, "branch_type": "N/A", "jump": 0, "jump_type": "N/A", "imm_type": "3'b011",
-  "notes": "rd = imm<<12; result_src=imm bypasses ALU — the mux routes imm directly to regfile"
-}
-
-Example 3 — BEQ (B-type — branch_type drives dedicated comparator, NOT ALU subtraction):
-{
-  "instruction": "BEQ", "format": "B", "opcode": "1100011", "funct3": "000", "funct7": "N/A",
-  "ALU_op": "ADD", "alu_src_a": "rs1", "alu_src_b": "rs2", "result_src": "N/A",
-  "reg_write": 0, "mem_read": 0, "mem_write": 0, "mem_size": "N/A", "mem_extend": "N/A",
-  "branch": 1, "branch_type": "3'b000", "jump": 0, "jump_type": "N/A", "imm_type": "3'b010",
-  "notes": "branch_unit receives branch_type=3'b000 and compares rs1==rs2 directly"
-}
-
-Example 4 — JALR (I-type — jump_type=1 (jalr) triggers LSB clear on target address):
-{
-  "instruction": "JALR", "format": "I", "opcode": "1100111", "funct3": "000", "funct7": "N/A",
-  "ALU_op": "ADD", "alu_src_a": "rs1", "alu_src_b": "imm", "result_src": "pc+4",
-  "reg_write": 1, "mem_read": 0, "mem_write": 0, "mem_size": "N/A", "mem_extend": "N/A",
-  "branch": 0, "branch_type": "N/A", "jump": 1, "jump_type": "1", "imm_type": "3'b000",
-  "notes": "next_pc MUST clear bit[0]: target = (rs1+imm) & ~32'h1. rd = pc+4"
-}
-
-Example 5 — LB (I-type load — result_src=mem, mem_size and mem_extend critical):
-{
-  "instruction": "LB", "format": "I", "opcode": "0000011", "funct3": "000", "funct7": "N/A",
-  "ALU_op": "ADD", "alu_src_a": "rs1", "alu_src_b": "imm", "result_src": "mem",
-  "reg_write": 1, "mem_read": 1, "mem_write": 0, "mem_size": "2'b00", "mem_extend": "0",
-  "branch": 0, "branch_type": "N/A", "jump": 0, "jump_type": "N/A", "imm_type": "3'b000",
-  "notes": "rd = sign_ext(mem[rs1+imm][7:0])"
-}
-
-ADDITIONAL RULES:
-1. LUI: result_src="imm" — the final mux routes the shifted immediate DIRECTLY to regfile, bypassing ALU.
-2. AUIPC: ALU_op=ADD, alu_src_a=pc, result_src="alu" (ALU genuinely computes PC+imm).
-3. Branches: ALU_op=ADD (unused), branch_type="eq"|"ne"|"lt"|"ge"|"ltu"|"geu". branch_unit uses branch_type directly.
-4. JALR: jump_type="jalr" — pc_next module MUST apply & ~1 to the computed target.
-5. JAL: jump_type="jal" — no LSB clear needed.
-6. mem_size: LB/SB=2'b00, LH/SH=2'b01, LW/SW=2'b10 (matches funct3[1:0]).
-   mem_extend comes from funct3[2]: 0=signed (LB/LH), 1=unsigned (LBU/LHU). Stores do not use mem_extend.
-   CRITICAL: mem_extend=0 → sign-extend; mem_extend=1 → zero-extend. This matches the RISC-V funct3 encoding.
-7. All R-type instructions share opcode 0110011 — correct; funct3/funct7 differentiate them.
+Generate the JSON records for the requested instructions based on the provided corpus.
 """
 
 
@@ -682,6 +630,60 @@ SUB-WORD MEMORY SHIFT RULE (load_store.v):
 Output ONLY the raw Verilog code. DO NOT wrap the code in ```verilog or any other markdown fences. Do NOT add any introductory comments, conversational text, or prose at the beginning or end. The very first line of your output MUST be the `module` declaration.
 """
 
+
+def build_isa_cheatsheet(isa_records: list) -> str:
+    """
+    Context Distillation: Compress the full ISA JSON (~7,000 tokens) into a
+    dense, tabular cheatsheet (~500 tokens) containing ONLY the binary wiring
+    signals needed by control.v generation.
+
+    This cheatsheet is used ONLY in continuation rounds (Round 2+) where the
+    LLM just needs to finish a case statement — not understand the architecture.
+    """
+    ALU_OP_MAP = {
+        'ADD': "4'b0000", 'SUB': "4'b0001", 'SLL': "4'b0010", 'SLT': "4'b0011",
+        'SLTU': "4'b0100", 'XOR': "4'b0101", 'SRL': "4'b0110", 'SRA': "4'b0111",
+        'OR': "4'b1000", 'AND': "4'b1001",
+    }
+    header = (
+        "=== ISA WIRING CHEATSHEET (binary constants only — use these EXACTLY) ===\n"
+        f"{'INSTR':<6}| {'opcode':<7} | {'f3':<3} | {'f7b5':<4} "
+        f"| {'alu_op':<8}| {'imm':<6}| rw | mr | mw | br | jmp | "
+        f"{'alu_a':<6}| {'alu_b':<5}| {'res_src':<7}| "
+        f"{'m_sz':<5}| {'m_ext':<5}| {'br_type':<7}| jmp_t"
+    )
+    sep = "-" * 125
+    rows = [header, sep]
+    for r in isa_records:
+        if 'instruction' not in r:
+            continue
+        instr   = r['instruction']
+        opcode  = r['opcode']
+        f3      = r['funct3']   if r.get('funct3')   != 'N/A' else '---'
+        f7_raw  = str(r.get('funct7', 'N/A'))
+        f7b5    = ('1' if f7_raw == '0100000' else '0') if f7_raw != 'N/A' else '-'
+        alu_raw = r.get('ALU_op', 'ADD')
+        alu_op  = ALU_OP_MAP.get(alu_raw, alu_raw)
+        imm     = r.get('imm_type', 'N/A')
+        reg_w   = int(r.get('reg_write', 0))
+        mem_r   = int(r.get('mem_read', 0))
+        mem_w   = int(r.get('mem_write', 0))
+        branch  = int(r.get('branch', 0))
+        jump    = int(r.get('jump', 0))
+        alu_a   = str(r.get('alu_src_a', 'N/A'))
+        alu_b   = str(r.get('alu_src_b', 'N/A'))
+        res_src = str(r.get('result_src', 'N/A'))
+        mem_sz  = str(r.get('mem_size', 'N/A'))
+        mem_ext = str(r.get('mem_extend', 'N/A'))
+        br_type = str(r.get('branch_type', 'N/A'))
+        jmp_t   = str(r.get('jump_type', 'N/A'))
+        rows.append(
+            f"{instr:<6}| {opcode:<7} | {f3:<3} | {f7b5:<4} "
+            f"| {alu_op:<8}| {imm:<6}| {reg_w}  | {mem_r}  | {mem_w}  | {branch}  | {jump}   | "
+            f"{alu_a:<6}| {alu_b:<5}| {res_src:<7}| "
+            f"{mem_sz:<5}| {mem_ext:<5}| {br_type:<7}| {jmp_t}"
+        )
+    return '\n'.join(rows)
 
 # Hard limit of the model — input_tokens + max_tokens must not exceed this.
 _MODEL_CTX_LIMIT = 7800   # 8000 TPM limit minus 200-token safety margin
@@ -1438,7 +1440,28 @@ with tab_agent:
 
     user_request = st.text_area(
         "Design Request",
-        value="Build a single-cycle RV32I processor core that passes the riscv-tests suite.",
+        value="""You are generating RTL for a **simple in-order RV32I processor** — a 32-bit RISC-V core implementing the base integer instruction set. This is the smallest complete RISC-V ISA: 47 instructions covering arithmetic, loads/stores, branches, and jumps. No floating point, no compressed instructions, no privileged mode required.
+
+A minimal in-order implementation has the following canonical stages:
+
+```
+Fetch → Decode → Execute → Memory → Writeback
+```
+
+Key components to generate:
+
+| Component | Description |
+|---|---|
+| **Program Counter (PC)** | Holds current instruction address, updates on branch/jump or sequential increment |
+| **Instruction Fetch** | Reads instruction from memory at PC |
+| **Decoder** | Decodes opcode, funct3, rs1, rs2, rd, and immediate fields |
+| **Register File** | 32 × 32-bit general-purpose registers (x0 hardwired to 0) |
+| **ALU** | Performs ADD, SUB, AND, OR, XOR, SLT, shifts |
+| **Branch Unit** | Evaluates BEQ, BNE, BLT, BGE, BLTU, BGEU conditions |
+| **Load/Store Unit** | Handles LW, LH, LB, SW, SH, SB with byte-enable logic |
+| **Control Hazard Handling** | Pipeline flush or stall on taken branches |
+
+> You are **not** expected to implement caches, out-of-order execution, branch prediction, or privilege modes. Focus on a correct, functional RV32I core.""",
         height=80,
         key="planner_input",
         label_visibility="collapsed",
@@ -1512,11 +1535,11 @@ with tab_agent:
     st.markdown('</div>', unsafe_allow_html=True)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # PHASE 2 — ISA EXPERT
+    # PHASE 2 — RESEARCHER + SYSTEMS ENGINEER
     # ─────────────────────────────────────────────────────────────────────────
     st.markdown('<div class="agent-card agent-card-isa">', unsafe_allow_html=True)
-    st.markdown('<div class="agent-header agent-header-isa">⬡ Phase 2 — ISA Expert Agent (RAG-Grounded)</div>', unsafe_allow_html=True)
-    st.markdown("Retrieves precise encoding + control signal data from the RISC-V corpus for every instruction in the plan.", unsafe_allow_html=False)
+    st.markdown('<div class="agent-header agent-header-isa">⬡ Phase 2 — Researcher Agent & Systems Engineer</div>', unsafe_allow_html=True)
+    st.markdown("Runs focused micro-queries against the RAG corpus to extract ISA facts, then deterministically computes the binary data (microarch.yaml).", unsafe_allow_html=False)
 
     plan_done = st.session_state.agent_plan is not None  # Re-evaluate to catch Phase 1 completion mid-run
 
@@ -1526,77 +1549,63 @@ with tab_agent:
         # Pre-load the RAG pipeline as soon as Phase 1 is done so Phase 2 button is instant
         with st.spinner("⚙️ Warming up RAG pipeline..."):
             pipe = load_pipeline()
-        st.caption("✅ RAG pipeline ready. Click Run ISA Expert to decode all instruction groups.")
+        st.caption("✅ RAG pipeline ready. Click Run Researcher to extract facts and compute ICD.")
 
-        if st.button("▶ Run ISA Expert", type="primary", key="run_isa"):
+        if st.button("▶ Run Researcher + Systems Engineer", type="primary", key="run_isa"):
             if not api_key:
                 st.error("❌ Add Groq API Key in sidebar.")
             else:
                 from groq import Groq
                 groq_client = Groq(api_key=api_key)
-                import rag_test as rt
-                limiter = rt.RateLimiter(max_tpm=8000, max_rpm=30)
+                
+                # 1. Run Researcher Agent (Stage 1)
+                with st.spinner("🔬 Researcher Agent running micro-queries against RAG corpus..."):
+                    import importlib
+                    import researcher_agent
+                    importlib.reload(researcher_agent)
+                    arch = plan.get('architecture', 'RISC-V RV32I')
+                    isa_facts = researcher_agent.run_researcher_sync(groq_client, pipe, arch)
+                
+                # 2. Run Systems Engineer (Stage 2)
+                with st.spinner("⚙️ Systems Engineer deterministically computing microarch.yaml..."):
+                    import json
+                    with open("debug_isa_facts_dump.json", "w") as f:
+                        json.dump(isa_facts, f, indent=2)
+                        
+                    from systems_engineer import MicroarchBuilder, load_offline_isa
+                    import importlib
+                    import systems_engineer
+                    importlib.reload(systems_engineer)
+                    offline_isa = systems_engineer.load_offline_isa("riscv32")
+                    builder = systems_engineer.MicroarchBuilder(isa_facts, offline_isa)
+                    microarch = builder.build()
+                    builder.save(microarch, "microarch.yaml")
 
-                plan = st.session_state.agent_plan
-                all_records = []
-                isa_progress = st.progress(0, text="Retrieving from corpus...")
-                per_group = plan.get("instruction_groups", [])
-
-                for gi, grp in enumerate(per_group):
-                    query = (f"Instruction encoding, opcode, funct3, funct7, and control signals "
-                             f"for {grp['group']}: {', '.join(grp['instructions'])}")
-
-                    isa_progress.progress((gi) / len(per_group),
-                                         text=f"RAG → {grp['group']} ({gi+1}/{len(per_group)})")
-
-                    parents = run_retrieval(pipe, query, use_hyde, groq_client,
-                                            top_k_parents=top_k_parents,
-                                            top_k_children=top_k_children)
-
-                    context = "\n\n---\n\n".join(
-                        f"[{p['section_title']}]\n{p['full_text'][:1200]}" for p in parents
-                    )
-                    user_msg = (f"Instructions to decode: {', '.join(grp['instructions'])}\n\n"
-                                f"Context from RISC-V corpus:\n{context}")
-
-                    raw = llm_call(groq_client, ISA_EXPERT_SYSTEM, user_msg, limiter, max_tokens=2000)
-                    records = parse_json_safe(raw)
-                    if isinstance(records, list):
-                        if len(records) > 0:
-                            records[0]["_context_used"] = context
-                        all_records.extend(records)
-                    else:
-                        all_records.append({"group": grp["group"], "raw": raw, "_context_used": context})
-
-                isa_progress.progress(1.0, text="✅ ISA analysis complete.")
-                st.session_state.agent_isa = all_records
+                # 3. Store State
+                st.session_state.agent_microarch = microarch
+                st.session_state.agent_isa = microarch.get('instruction_icd', [])
                 st.session_state.agent_rtl = {}
                 saved = save_pipeline_snapshot("isa")
-                st.success(f"✅ Decoded {len(all_records)} instruction records — auto-saved to `{saved.name}`")
+                st.success(f"✅ Extracted facts and generated microarch.yaml! Auto-saved to `{saved.name}`")
 
         if st.session_state.agent_isa:
             records = st.session_state.agent_isa
-            typed = [r for r in records if "instruction" in r]
-            raw_fallbacks = [r for r in records if "instruction" not in r]
+            typed = [r for r in records if "mnemonic" in r]
+            raw_fallbacks = [r for r in records if "mnemonic" not in r]
 
             if typed:
                 st.markdown(f"#### 📊 Control Signal Truth Table ({len(typed)} instructions)")
-                # Build display table and exclude the internal _context_used key
+                # Build display table mapping new ICD standard keys
                 import pandas as pd
-                cols_show = ["instruction", "format", "opcode", "funct3", "funct7",
-                             "ALU_op", "alu_src_a", "alu_src_b",
+                cols_show = ["mnemonic", "format", "opcode", "funct3", "funct7b5",
+                             "alu_op_name", "alu_src_a", "alu_src_b",
                              "reg_write", "mem_read", "mem_write", "mem_size", "mem_extend",
-                             "branch", "jump", "wb_src", "imm_type"]
+                             "branch", "jump", "wb_name", "imm_type"]
                 safe_cols = [c for c in cols_show if any(c in r for r in typed)]
                 df = pd.DataFrame([{c: r.get(c, "—") for c in safe_cols} for r in typed])
                 st.dataframe(df, use_container_width=True, height=350)
                 
-                with st.expander("🔍 View RAG Contexts fed to ISA Expert"):
-                    st.markdown("For each instruction group, the RAG pipeline retrieved the following specific chunks from your corpus:")
-                    for r in records:
-                        if "_context_used" in r:
-                            st.markdown(f"**Group containing `{r.get('instruction', r.get('group', ''))}`**")
-                            st.code(r["_context_used"], language="markdown")
+
 
             for fb in raw_fallbacks:
                 with st.expander(f"⚠️ Raw output for {fb.get('group', 'unknown')}"):
@@ -1630,6 +1639,22 @@ with tab_agent:
             key="rtl_mod_select",
         )
 
+        _typed_records = [r for r in st.session_state.agent_isa if 'instruction' in r]
+        # Use dynamic microarch-based cheatsheet if available, else fall back to old builder
+        _microarch = st.session_state.get('agent_microarch')
+        if _microarch:
+            from systems_engineer import microarch_to_cheatsheet
+            isa_cheatsheet_display = microarch_to_cheatsheet(_microarch)
+            with st.expander("View ISA Cheatsheet (dynamic from microarch.yaml)"):
+                st.code(isa_cheatsheet_display, language="text")
+            with st.expander("View microarch.yaml (Interface Control Document)"):
+                import yaml as _yaml
+                st.code(_yaml.dump(_microarch, default_flow_style=False, sort_keys=False), language="yaml")
+        elif _typed_records:
+            isa_cheatsheet_display = build_isa_cheatsheet(_typed_records)
+            with st.expander("View ISA Cheatsheet (used internally for continuation loops)"):
+                st.code(isa_cheatsheet_display, language="text")
+
         if st.button("▶ Generate RTL", type="primary", key="run_rtl", disabled=not selected_mods):
             if not api_key:
                 st.error("❌ Add Groq API Key in sidebar.")
@@ -1653,6 +1678,32 @@ with tab_agent:
                     rtl_progress.progress(mi / len(selected_mods),
                                           text=f"Generating {mod_name}.v ({mi+1}/{len(selected_mods)})...")
 
+                    # ── Route: TRUTH_TABLE → Jinja2 (zero tokens) ──────────────────
+                    from rtl_renderer import RTLRenderer
+                    renderer = RTLRenderer(templates_dir="rtl_templates")
+                    if renderer.is_truth_table(mod_name):
+                        st.markdown(f"##### {mod_name}.v — Jinja2 Render (0 LLM tokens)")
+                        _microarch = st.session_state.get('agent_microarch')
+                        if _microarch is None:
+                            # Build microarch on-the-fly from current ISA records if not yet built
+                            from systems_engineer import build_from_files, load_offline_isa
+                            _offline = load_offline_isa("riscv32")
+                            from systems_engineer import MicroarchBuilder
+                            _typed = [r for r in st.session_state.agent_isa if 'instruction' in r]
+                            # Best-effort: use default facts since researcher hasn't run
+                            _microarch = build_from_files('riscv32', output_path='microarch.yaml')
+                            st.session_state['agent_microarch'] = _microarch
+                        try:
+                            _offline_isa = load_offline_isa("riscv32")
+                            verilog = renderer.render(mod_name, _microarch, _offline_isa)
+                            all_rtl[mod_name] = verilog
+                            st.code(verilog[:3000], language="verilog")
+                            st.success(f"{mod_name}.v rendered in 0 tokens via Jinja2.")
+                        except Exception as _e:
+                            st.error(f"Jinja2 render failed for {mod_name}: {_e}")
+                        continue   # skip LLM path entirely
+
+                    # ── Route: BEHAVIORAL_LOGIC → LLM + dynamic cheatsheet ─────────
                     mod_spec = next((m for m in modules if m["name"] == mod_name), {})
                     user_msg = textwrap.dedent(f"""
                     Architecture: {arch}
@@ -1668,11 +1719,22 @@ with tab_agent:
                     """).strip()
 
                     # ── Live code viewer ──────────────────────────────────────────
-                    st.markdown(f"##### 🔧 `{mod_name}.v` — Live Generation")
+                    st.markdown(f"##### {mod_name}.v — LLM Generation")
                     live_code = st.empty()   # placeholder updated after each round
 
+                    # Dynamic cheatsheet: if microarch built, use it; else fall back to old builder
+                    _microarch_cs = st.session_state.get('agent_microarch')
+                    if _microarch_cs:
+                        from systems_engineer import microarch_to_cheatsheet
+                        isa_cheatsheet = microarch_to_cheatsheet(_microarch_cs)
+                    else:
+                        _typed_records = [r for r in st.session_state.agent_isa if 'instruction' in r]
+                        isa_cheatsheet = build_isa_cheatsheet(_typed_records)
+
                     # Monkey-patch continuation to stream round-by-round previews
-                    def _gen_with_preview(mod_name=mod_name, user_msg=user_msg, live_code=live_code):
+                    def _gen_with_preview(mod_name=mod_name, user_msg=user_msg,
+                                          live_code=live_code,
+                                          isa_cheatsheet=isa_cheatsheet):
                         import types
                         logs = []
                         code = llm_call(groq_client, RTL_GENERATOR_SYSTEM, user_msg, limiter, max_tokens=4096)
@@ -1704,13 +1766,17 @@ with tab_agent:
                             code_for_ctx = re.sub(r'```[\w]*\n?', '', code).strip()
                             open_hint = _open_blocks(code_for_ctx)
                             sys_toks = len(RTL_GENERATOR_SYSTEM) // 4
-                            budget_chars = (_MODEL_CTX_LIMIT - sys_toks - 2000) * 4
-                            spec_chars = min(2000, budget_chars // 4)
-                            code_chars = budget_chars - 400 - spec_chars
+                            # Context Distillation: cheatsheet is ~500 tokens vs 7,049 for full JSON.
+                            # This frees ~6,500 tokens for the code tail + model output.
+                            cheatsheet_toks = len(isa_cheatsheet) // 4
+                            budget_chars = (_MODEL_CTX_LIMIT - sys_toks - cheatsheet_toks - 400) * 4
+                            # Allocate all remaining budget to the code tail
+                            code_tail_chars = max(800, budget_chars)
                             cont_user = (
-                                f"=== MODULE SPEC (truncated for budget) ===\n{user_msg[:spec_chars]}\n\n"
+                                f"=== ISA BINARY WIRING REFERENCE (use ONLY these exact values) ===\n"
+                                f"{isa_cheatsheet}\n\n"
                                 f"=== ALREADY GENERATED CODE — TAIL ===\n"
-                                f"```verilog\n{code_for_ctx[-max(500,code_chars):]}\n```\n\n"
+                                f"```verilog\n{code_for_ctx[-code_tail_chars:]}\n```\n\n"
                                 f"=== CONTINUATION INSTRUCTIONS ===\n"
                                 f"The generation was cut off mid-stream. Open blocks: {open_hint}.\n"
                                 f"- Continue EXACTLY from the last character above — do NOT restart the module.\n"

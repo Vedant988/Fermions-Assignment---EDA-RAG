@@ -1,0 +1,95 @@
+{
+  "user_prompt": "You are generating RTL for a **simple in-order RV32I processor** \u2014 a 32-bit RISC-V core implementing the base integer instruction set. This is the smallest complete RISC-V ISA: 47 instructions covering arithmetic, loads/stores, branches, and jumps. No floating point, no compressed instructions, no privileged mode required.\n\nA minimal in-order implementation has the following canonical stages:\n\n```\nFetch \u2192 Decode \u2192 Execute \u2192 Memory \u2192 Writeback\n```\n\nKey components to generate:\n\n| Component | Description |\n|---|---|\n| **Program Counter (PC)** | Holds current instruction address, updates on branch/jump or sequential increment |\n| **Instruction Fetch** | Reads instruction from memory at PC |\n| **Decoder** | Decodes opcode, funct3, rs1, rs2, rd, and immediate fields |\n| **Register File** | 32 \u00d7 32-bit general-purpose registers (x0 hardwired to 0) |\n| **ALU** | Performs ADD, SUB, AND, OR, XOR, SLT, shifts |\n| **Branch Unit** | Evaluates BEQ, BNE, BLT, BGE, BLTU, BGEU conditions |\n| **Load/Store Unit** | Handles LW, LH, LB, SW, SH, SB with byte-enable logic |\n| **Control Hazard Handling** | Pipeline flush or stall on taken branches |\n\n> You are **not** expected to implement caches, out-of-order execution, branch prediction, or privilege modes. Focus on a correct, functional RV32I core.",
+  "classification": {
+    "hardware_domain": "CPU",
+    "data_width": 32,
+    "core_focus": [
+      "RV32I",
+      "in-order"
+    ],
+    "custom_user_quirks": []
+  },
+  "extracted_facts": {
+    "ports_and_widths": {
+      "ports": [
+        {
+          "name": "clk",
+          "direction": "in",
+          "width": 1
+        },
+        {
+          "name": "rst_n",
+          "direction": "in",
+          "width": 1
+        },
+        {
+          "name": "instr_addr",
+          "direction": "out",
+          "width": 32
+        },
+        {
+          "name": "instr_data",
+          "direction": "in",
+          "width": 32
+        },
+        {
+          "name": "data_addr",
+          "direction": "out",
+          "width": 32
+        },
+        {
+          "name": "data_wdata",
+          "direction": "out",
+          "width": 32
+        },
+        {
+          "name": "data_rdata",
+          "direction": "in",
+          "width": 32
+        },
+        {
+          "name": "data_we",
+          "direction": "out",
+          "width": 1
+        },
+        {
+          "name": "data_re",
+          "direction": "out",
+          "width": 1
+        },
+        {
+          "name": "data_be",
+          "direction": "out",
+          "width": 4
+        }
+      ]
+    },
+    "clock_and_reset": {
+      "clock": "unknown",
+      "reset": "unknown"
+    },
+    "memory_interfaces": {
+      "interfaces": [
+        {
+          "name": "mem",
+          "type": "rw"
+        }
+      ]
+    },
+    "dynamic_query_1": {
+      "answer": "Pipeline stages and data paths for a simple in\u2011order RV32I core:\n\nIF (Instruction Fetch):\n  \u2022 PC holds current address.\n  \u2022 Instruction memory read at PC.\n  \u2022 PC updated to PC+4 or branch target.\n  \u2022 IF/ID pipeline register holds fetched instruction and PC+4.\n\nID (Instruction Decode):\n  \u2022 Decode opcode, funct3, rs1, rs2, rd, immediate.\n  \u2022 Read register file for rs1 and rs2.\n  \u2022 ID/EX register passes decoded fields, register values, and PC+4 to EX.\n\nEX (Execute):\n  \u2022 ALU performs arithmetic/logic or shift.\n  \u2022 Branch unit evaluates BEQ/BNE/BLT/etc. and produces branch taken flag and target.\n  \u2022 EX/MEM register passes ALU result, branch flag, target, memory address (for loads/stores), and rd to MEM.\n\nMEM (Memory):\n  \u2022 For loads: read from data memory, apply byte\u2011enable for LB/LH.\n  \u2022 For stores: write to data memory with byte\u2011enable.\n  \u2022 MEM/WB register passes final data (ALU result or loaded value) and rd to WB.\n\nWB (Writeback):\n  \u2022 Write data to register file at rd (x0 is hardwired to 0).\n\nData\u2011path signals:\n  \u2022 PC \u2192 IF/ID.\n  \u2022 IF/ID \u2192 ID/EX.\n  \u2022 ID/EX \u2192 EX/MEM.\n  \u2022 EX/MEM \u2192 MEM/WB.\n  \u2022 MEM/WB \u2192 register file.\n\nControl hazard handling:\n  \u2022 On a taken branch, flush IF/ID and update PC.\n  \u2022 Load\u2011use hazard: stall ID/EX until load completes.\n\nExample instruction flow (ADD x5, x1, x2):\n  1. IF fetches instruction at PC.\n  2. ID decodes opcode, reads x1 and x2.\n  3. EX adds values, result in EX/MEM.\n  4. MEM bypasses to MEM/WB.\n  5. WB writes result to x5.\n\nExample branch flow (BEQ x1, x2, label):\n  1. IF fetches instruction.\n  2. ID decodes and reads x1, x2.\n  3. EX evaluates equality; if taken, branch target is PC+4+imm.\n  4. IF/ID flushed; PC updated to target.\n  5. Subsequent instructions fetched from target address."
+    },
+    "dynamic_query_2": {
+      "answer": "unknown"
+    },
+    "dynamic_query_3": {
+      "answer": "The PicoRV32 implements a simple synchronous data\u2011memory interface driven by the signals mem_la_read, mem_la_write and mem_la_addr.  The core asserts mem_la_read or mem_la_write together with the 32\u2011bit address; the memory must return the requested data on the next cycle and assert a ready/valid handshake (e.g., mem_la_ready).  The pipeline stalls until the ready signal is asserted, so the core can tolerate variable memory latency.  \n\nAlignment and byte\u2011enable handling:  \n\u2022 Word accesses (LW/SW) require the two least\u2011significant address bits to be 00.  \n\u2022 Half\u2011word accesses (LH/SH) require the least\u2011significant bit to be 0.  \n\u2022 Byte accesses (LB/SB) can use any address.  \nThe core generates byte\u2011enable signals for stores: a byte store enables only the corresponding byte lane, a half\u2011word store enables two adjacent lanes, and a word store enables all four lanes.  For loads the core reads the full 32\u2011bit word and then sign\u2011extends or zero\u2011extends the selected byte/half\u2011word based on the instruction.  \n\nCache or memory latency:  \nThe core does not include a cache; any external cache must present the same mem_la_* interface and satisfy the ready handshake.  The look\u2011ahead interface (mem_la_* signals) can be used to reduce latency, but the core functions correctly with the normal synchronous interface and will stall the pipeline until the memory is ready.  "
+    },
+    "dynamic_query_4": {
+      "answer": "Branch instructions are resolved in the Execute stage. The PC is updated only after the branch condition is evaluated. For JAL and JALR the target is computed as follows: JAL: target = PC + 4 + sign\u2011extended immediate (the immediate is left\u2011shifted by 1 to maintain 2\u2011byte alignment). JALR: target = rs1 + sign\u2011extended immediate; the least\u2011significant bit of the target is cleared to zero. For conditional branches (BEQ, BNE, BLT, BGE, BLTU, BGEU) the target = PC + 4 + sign\u2011extended immediate. If the branch condition is false, the PC simply increments by 4 and no flush occurs. If the condition is true, the core flushes all instructions that have been fetched after the branch until the target instruction is fetched. No branch prediction is performed; the pipeline stalls only for the one cycle needed to resolve the branch. Mis\u2011aligned branch targets (not a multiple of 4) raise an instruction\u2011address\u2011misaligned exception only when the branch is taken; if the branch is not taken the exception is not raised. If an instruction access\u2011fault or page\u2011fault occurs on the target of a taken branch or jump, the exception is reported on the target instruction, not on the branch/jump instruction itself."
+    },
+    "dynamic_query_5": {
+      "answer": "unknown"
+    }
+  }
+}

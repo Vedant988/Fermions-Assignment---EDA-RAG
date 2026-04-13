@@ -1,0 +1,52 @@
+{
+  "alu_operations": ["ADD", "SUB", "AND", "OR", "XOR", "SLL", "SRL", "SRA", "SLT", "SLTU"],
+  "memory_sizes": ["BYTE", "HALF", "WORD"],
+  "immediate_formats": ["I", "S", "B", "U", "J"],
+  "writeback_sources": ["ALU", "MEMORY", "PC_PLUS_4", "IMMEDIATE"],
+  "branch_conditions": ["EQ", "NE", "LT", "GE", "LTU", "GEU"],
+  "special_rules": {"x0_hardwired_zero": true, "jalr_lsb_clear": true},
+  "instruction_records": [
+    {"mnemonic": "LUI",   "alu_op": "ADD",  "alu_src_a": "zero","alu_src_b": "imm", "writeback": "IMMEDIATE", "reg_write": true,  "mem_read": false, "mem_write": false, "branch": false, "jump": false},
+    {"mnemonic": "AUIPC", "alu_op": "ADD",  "alu_src_a": "pc",  "alu_src_b": "imm", "writeback": "ALU",       "reg_write": true,  "mem_read": false, "mem_write": false, "branch": false, "jump": false},
+    {"mnemonic": "JAL",   "alu_op": "ADD",  "alu_src_a": "pc",  "alu_src_b": "imm", "writeback": "PC_PLUS_4", "reg_write": true,  "mem_read": false, "mem_write": false, "branch": false, "jump": true,  "jump_type": "jal"},
+    {"mnemonic": "JALR",  "alu_op": "ADD",  "alu_src_a": "rs1", "alu_src_b": "imm", "writeback": "PC_PLUS_4", "reg_write": true,  "mem_read": false, "mem_write": false, "branch": false, "jump": true,  "jump_type": "jalr", "special_rules": {"lsb_clear": true}},
+    
+    {"mnemonic": "BEQ",   "alu_op": "ADD",  "alu_src_a": "rs1", "alu_src_b": "rs2", "writeback": "ALU",       "reg_write": false, "mem_read": false, "mem_write": false, "branch": true,  "jump": false},
+    {"mnemonic": "BNE",   "alu_op": "ADD",  "alu_src_a": "rs1", "alu_src_b": "rs2", "writeback": "ALU",       "reg_write": false, "mem_read": false, "mem_write": false, "branch": true,  "jump": false},
+    {"mnemonic": "BLT",   "alu_op": "ADD",  "alu_src_a": "rs1", "alu_src_b": "rs2", "writeback": "ALU",       "reg_write": false, "mem_read": false, "mem_write": false, "branch": true,  "jump": false},
+    {"mnemonic": "BGE",   "alu_op": "ADD",  "alu_src_a": "rs1", "alu_src_b": "rs2", "writeback": "ALU",       "reg_write": false, "mem_read": false, "mem_write": false, "branch": true,  "jump": false},
+    {"mnemonic": "BLTU",  "alu_op": "ADD",  "alu_src_a": "rs1", "alu_src_b": "rs2", "writeback": "ALU",       "reg_write": false, "mem_read": false, "mem_write": false, "branch": true,  "jump": false},
+    {"mnemonic": "BGEU",  "alu_op": "ADD",  "alu_src_a": "rs1", "alu_src_b": "rs2", "writeback": "ALU",       "reg_write": false, "mem_read": false, "mem_write": false, "branch": true,  "jump": false},
+    
+    {"mnemonic": "LB",    "alu_op": "ADD",  "alu_src_a": "rs1", "alu_src_b": "imm", "writeback": "MEMORY",    "reg_write": true,  "mem_read": true,  "mem_write": false, "mem_size": "BYTE", "mem_extend": "signed",   "branch": false, "jump": false},
+    {"mnemonic": "LH",    "alu_op": "ADD",  "alu_src_a": "rs1", "alu_src_b": "imm", "writeback": "MEMORY",    "reg_write": true,  "mem_read": true,  "mem_write": false, "mem_size": "HALF", "mem_extend": "signed",   "branch": false, "jump": false},
+    {"mnemonic": "LW",    "alu_op": "ADD",  "alu_src_a": "rs1", "alu_src_b": "imm", "writeback": "MEMORY",    "reg_write": true,  "mem_read": true,  "mem_write": false, "mem_size": "WORD", "mem_extend": "none",     "branch": false, "jump": false},
+    {"mnemonic": "LBU",   "alu_op": "ADD",  "alu_src_a": "rs1", "alu_src_b": "imm", "writeback": "MEMORY",    "reg_write": true,  "mem_read": true,  "mem_write": false, "mem_size": "BYTE", "mem_extend": "unsigned", "branch": false, "jump": false},
+    {"mnemonic": "LHU",   "alu_op": "ADD",  "alu_src_a": "rs1", "alu_src_b": "imm", "writeback": "MEMORY",    "reg_write": true,  "mem_read": true,  "mem_write": false, "mem_size": "HALF", "mem_extend": "unsigned", "branch": false, "jump": false},
+    
+    {"mnemonic": "SB",    "alu_op": "ADD",  "alu_src_a": "rs1", "alu_src_b": "imm", "writeback": "ALU",       "reg_write": false, "mem_read": false, "mem_write": true,  "mem_size": "BYTE", "branch": false, "jump": false},
+    {"mnemonic": "SH",    "alu_op": "ADD",  "alu_src_a": "rs1", "alu_src_b": "imm", "writeback": "ALU",       "reg_write": false, "mem_read": false, "mem_write": true,  "mem_size": "HALF", "branch": false, "jump": false},
+    {"mnemonic": "SW",    "alu_op": "ADD",  "alu_src_a": "rs1", "alu_src_b": "imm", "writeback": "ALU",       "reg_write": false, "mem_read": false, "mem_write": true,  "mem_size": "WORD", "branch": false, "jump": false},
+    
+    {"mnemonic": "ADDI",  "alu_op": "ADD",  "alu_src_a": "rs1", "alu_src_b": "imm", "writeback": "ALU",       "reg_write": true,  "mem_read": false, "mem_write": false, "branch": false, "jump": false},
+    {"mnemonic": "SLTI",  "alu_op": "SLT",  "alu_src_a": "rs1", "alu_src_b": "imm", "writeback": "ALU",       "reg_write": true,  "mem_read": false, "mem_write": false, "branch": false, "jump": false},
+    {"mnemonic": "SLTIU", "alu_op": "SLTU", "alu_src_a": "rs1", "alu_src_b": "imm", "writeback": "ALU",       "reg_write": true,  "mem_read": false, "mem_write": false, "branch": false, "jump": false},
+    {"mnemonic": "XORI",  "alu_op": "XOR",  "alu_src_a": "rs1", "alu_src_b": "imm", "writeback": "ALU",       "reg_write": true,  "mem_read": false, "mem_write": false, "branch": false, "jump": false},
+    {"mnemonic": "ORI",   "alu_op": "OR",   "alu_src_a": "rs1", "alu_src_b": "imm", "writeback": "ALU",       "reg_write": true,  "mem_read": false, "mem_write": false, "branch": false, "jump": false},
+    {"mnemonic": "ANDI",  "alu_op": "AND",  "alu_src_a": "rs1", "alu_src_b": "imm", "writeback": "ALU",       "reg_write": true,  "mem_read": false, "mem_write": false, "branch": false, "jump": false},
+    {"mnemonic": "SLLI",  "alu_op": "SLL",  "alu_src_a": "rs1", "alu_src_b": "imm", "writeback": "ALU",       "reg_write": true,  "mem_read": false, "mem_write": false, "branch": false, "jump": false},
+    {"mnemonic": "SRLI",  "alu_op": "SRL",  "alu_src_a": "rs1", "alu_src_b": "imm", "writeback": "ALU",       "reg_write": true,  "mem_read": false, "mem_write": false, "branch": false, "jump": false},
+    {"mnemonic": "SRAI",  "alu_op": "SRA",  "alu_src_a": "rs1", "alu_src_b": "imm", "writeback": "ALU",       "reg_write": true,  "mem_read": false, "mem_write": false, "branch": false, "jump": false},
+    
+    {"mnemonic": "ADD",   "alu_op": "ADD",  "alu_src_a": "rs1", "alu_src_b": "rs2", "writeback": "ALU",       "reg_write": true,  "mem_read": false, "mem_write": false, "branch": false, "jump": false},
+    {"mnemonic": "SUB",   "alu_op": "SUB",  "alu_src_a": "rs1", "alu_src_b": "rs2", "writeback": "ALU",       "reg_write": true,  "mem_read": false, "mem_write": false, "branch": false, "jump": false},
+    {"mnemonic": "SLL",   "alu_op": "SLL",  "alu_src_a": "rs1", "alu_src_b": "rs2", "writeback": "ALU",       "reg_write": true,  "mem_read": false, "mem_write": false, "branch": false, "jump": false},
+    {"mnemonic": "SLT",   "alu_op": "SLT",  "alu_src_a": "rs1", "alu_src_b": "rs2", "writeback": "ALU",       "reg_write": true,  "mem_read": false, "mem_write": false, "branch": false, "jump": false},
+    {"mnemonic": "SLTU",  "alu_op": "SLTU", "alu_src_a": "rs1", "alu_src_b": "rs2", "writeback": "ALU",       "reg_write": true,  "mem_read": false, "mem_write": false, "branch": false, "jump": false},
+    {"mnemonic": "XOR",   "alu_op": "XOR",  "alu_src_a": "rs1", "alu_src_b": "rs2", "writeback": "ALU",       "reg_write": true,  "mem_read": false, "mem_write": false, "branch": false, "jump": false},
+    {"mnemonic": "SRL",   "alu_op": "SRL",  "alu_src_a": "rs1", "alu_src_b": "rs2", "writeback": "ALU",       "reg_write": true,  "mem_read": false, "mem_write": false, "branch": false, "jump": false},
+    {"mnemonic": "SRA",   "alu_op": "SRA",  "alu_src_a": "rs1", "alu_src_b": "rs2", "writeback": "ALU",       "reg_write": true,  "mem_read": false, "mem_write": false, "branch": false, "jump": false},
+    {"mnemonic": "OR",    "alu_op": "OR",   "alu_src_a": "rs1", "alu_src_b": "rs2", "writeback": "ALU",       "reg_write": true,  "mem_read": false, "mem_write": false, "branch": false, "jump": false},
+    {"mnemonic": "AND",   "alu_op": "AND",  "alu_src_a": "rs1", "alu_src_b": "rs2", "writeback": "ALU",       "reg_write": true,  "mem_read": false, "mem_write": false, "branch": false, "jump": false}
+  ]
+}

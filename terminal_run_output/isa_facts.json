@@ -1,0 +1,51 @@
+{
+  "architecture": "RISC-V RV32I",
+  "alu_operations": [
+    "ADD",
+    "SUB",
+    "AND",
+    "OR",
+    "XOR",
+    "SLT",
+    "SLTU",
+    "SLL",
+    "SRL",
+    "SRA"
+  ],
+  "memory_sizes": [
+    "BYTE"
+  ],
+  "branch_conditions": [
+    "EQ",
+    "NE",
+    "LT",
+    "GE",
+    "LTU",
+    "GEU"
+  ],
+  "jump_types": {
+    "types": [
+      "JAL"
+    ],
+    "notes": {
+      "JAL": "PC-relative"
+    }
+  },
+  "immediate_formats": [
+    "I-type",
+    "S-type",
+    "B-type",
+    "U-type",
+    "J-type"
+  ],
+  "writeback_sources": [
+    "ALU result",
+    "memory load data",
+    "PC+4",
+    "upper immediate"
+  ],
+  "special_rules": {
+    "x0_reads_zero": true,
+    "JALR_clears_bit0": true
+  }
+}
